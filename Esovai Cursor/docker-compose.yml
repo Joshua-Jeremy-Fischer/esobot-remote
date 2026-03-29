@@ -3,8 +3,6 @@
 # Nach docker compose up: nur kimi-frontend ins Netz des MCP-cloudflared hängen, z. B.:
 #   docker network connect <NETZNAME> kimi-frontend
 
-version: "3.8"
-
 services:
   backend:
     build: ./backend
@@ -26,16 +24,42 @@ services:
     restart: unless-stopped
     depends_on:
       - backend
+    ports:
+      - "127.0.0.1:3009:80"
     read_only: true
     cap_drop: [ALL]
     # Port 80 < 1024: ohne NET_BIND_SERVICE startet nginx mit cap_drop ALL nicht zuverlässig
-    cap_add: [NET_BIND_SERVICE]
+    cap_add: [NET_BIND_SERVICE, CHOWN, SETUID, SETGID]
     security_opt:
       - no-new-privileges:true
     tmpfs:
       - /tmp:size=10m,mode=1777
-      - /var/cache/nginx:size=50m,mode=0755
+      - /var/cache/nginx:size=50m,mode=1777
       - /var/run:size=1m,mode=0755
+    networks:
+      - app-net
+
+  eso-bot:
+    build: ./eso-bot
+    container_name: eso-bot
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      AGENT_PORT: "3020"
+      SANDBOX_ROOT: /workspace
+      LLM_BASE_URL: "http://ollama:11434/v1"
+      LLM_API_KEY: "ollama"
+      LLM_MODEL: "kimi-k2.5:cloud"
+      ALLOW_SHELL: "false"
+      ALLOW_WEB: "true"
+      ALLOW_FILES: "true"
+      ALLOW_GIT: "false"
+    volumes:
+      - eso_workspace:/workspace
+    cap_drop: [ALL]
+    cap_add: []
+    security_opt:
+      - no-new-privileges:true
     networks:
       - app-net
 
@@ -57,3 +81,4 @@ networks:
 
 volumes:
   ollama_data:
+  eso_workspace:
