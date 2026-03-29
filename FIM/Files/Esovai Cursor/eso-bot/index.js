@@ -6,8 +6,14 @@ import { getPermissions, getCeiling, setPermissions } from "./permissions.js";
 const app  = express();
 const PORT = process.env.AGENT_PORT || 3020;
 
-// Internes Bearer-Token (nur Backend darf eso-bot direkt ansprechen)
-const BEARER_TOKEN = process.env.ESO_BOT_TOKEN || "";
+// Internes Bearer-Token — muss mit kimi-backend ESO_BOT_TOKEN übereinstimmen
+const BEARER_TOKEN = (process.env.ESO_BOT_TOKEN || "").trim();
+const INSECURE_NO_AUTH = process.env.ESO_BOT_INSECURE_NO_AUTH === "true";
+
+if (!BEARER_TOKEN && !INSECURE_NO_AUTH) {
+  console.error("FATAL: ESO_BOT_TOKEN fehlt — setze Secret oder nur lokal ESO_BOT_INSECURE_NO_AUTH=true");
+  process.exit(1);
+}
 
 app.use(express.json({ limit: "10mb" }));
 
@@ -20,8 +26,8 @@ function timingSafeCompare(a, b) {
 }
 
 function requireAuth(req, res, next) {
-  if (!BEARER_TOKEN) return next(); // kein Token konfiguriert = nur interne Docker-Nutzung
-  const token = req.headers["authorization"]?.replace("Bearer ", "") ?? "";
+  if (INSECURE_NO_AUTH && !BEARER_TOKEN) return next();
+  const token = req.headers.authorization?.replace(/^Bearer\s+/i, "") ?? "";
   if (!token || !timingSafeCompare(token, BEARER_TOKEN)) {
     return res.status(401).json({ error: "Unauthorized" });
   }
@@ -77,7 +83,7 @@ app.listen(PORT, () => {
   ╚══════╝╚══════╝ ╚═════╝       ╚═════╝  ╚═════╝    ╚═╝
   `);
   console.log(`✓ Eso Bot läuft auf Port ${PORT}`);
-  console.log(`  Auth:  ${BEARER_TOKEN ? "🔐 Token aktiv" : "⚠️  Kein Token (nur Docker-intern)"}`);
+  console.log(`  Auth:  ${INSECURE_NO_AUTH && !BEARER_TOKEN ? "⚠️  INSECURE_NO_AUTH" : "🔐 Bearer aktiv"}`);
   console.log(`  Shell: ${perms.shell ? "✅ ON" : "🔴 OFF"} (Ceiling: ${ceil.shell ? "erlaubt" : "gesperrt"})`);
   console.log(`  Web:   ${perms.web   ? "✅ ON" : "🔴 OFF"} (Ceiling: ${ceil.web   ? "erlaubt" : "gesperrt"})`);
   console.log(`  Files: ${perms.files ? "✅ ON" : "🔴 OFF"} (Ceiling: ${ceil.files ? "erlaubt" : "gesperrt"})`);

@@ -13,6 +13,8 @@ pnpm-debug.log*
 
 # ── Runtime / lokal generiert ─────────────────────────────
 .fim_hashes.json
+# eso-bot: optional lokaler Runtime-Ordner (Dev)
+eso-bot/data/
 
 # ── Logs & OS ─────────────────────────────────────────────
 *.log

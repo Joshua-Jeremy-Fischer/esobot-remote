@@ -164,6 +164,14 @@ app.use("/api/chat", rateLimit({
   legacyHeaders: false,
 }));
 
+// Agent-Proxy (eso-bot): teurer als reiner Chat → eigenes Limit
+app.use("/api/agent", rateLimit({
+  windowMs: 60_000,
+  max: 15,
+  standardHeaders: true,
+  legacyHeaders: false,
+}));
+
 // 5. Provider Info Endpoints
 app.get("/api/providers", (_req, res) => {
   res.json({
@@ -274,7 +282,7 @@ app.post("/api/chat", async (req, res) => {
   }
 });
 
-// 7. Agent Proxy
+// 7. Agent Proxy (Rate-Limit siehe oben auf /api/agent)
 app.use("/api/agent", createAgentRouter());
 
 app.listen(process.env.PORT || 3010, () =>
