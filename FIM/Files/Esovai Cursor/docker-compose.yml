@@ -39,6 +39,26 @@ services:
     networks:
       - app-net
 
+  kimi-agent:
+    build: ./kimi-agent
+    container_name: kimi-agent
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      SANDBOX_ROOT: /app/sandbox
+      AGENT_DB_PATH: /app/data/agent.db
+      AGENT_PORT: "3020"
+      ALLOW_WEB_SEARCH: "false"
+      ALLOW_SHELL_EXEC: "false"
+    volumes:
+      - kimi_agent_data:/app/data
+      - kimi_agent_sandbox:/app/sandbox
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - app-net
+
   ollama:
     image: ollama/ollama
     container_name: ollama
@@ -57,3 +77,5 @@ networks:
 
 volumes:
   ollama_data:
+  kimi_agent_data:
+  kimi_agent_sandbox:

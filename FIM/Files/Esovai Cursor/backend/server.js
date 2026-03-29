@@ -7,14 +7,67 @@ import crypto from "crypto";
 import fs from "fs";
 import { fileURLToPath } from "url";
 import path from "path";
+import { createAuthRouter } from "./auth.js";
+import { createAgentRouter } from "./agent.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// ── Startup Env-Check ─────────────────────────────────────
-const PROVIDER = process.env.LLM_PROVIDER || "nvidia";
+// ── Provider Registry ──────────────────────────────────────
+const PROVIDER_REGISTRY = {
+  nvidia: {
+    apiKey:  () => process.env.NVIDIA_API_KEY  || "nvidia",
+    baseURL: () => "https://integrate.api.nvidia.com/v1",
+    model:   () => process.env.NVIDIA_MODEL    || "moonshotai/kimi-k2-instruct-0905",
+  },
+  "opencode-go": {
+    apiKey:  () => process.env.OPENCODE_API_KEY  || "",
+    baseURL: () => process.env.OPENCODE_BASE_URL || "https://opencode.ai/zen/go/v1",
+    model:   () => process.env.OPENCODE_MODEL    || "opencode-go/kimi-k2.5",
+  },
+  ollama: {
+    apiKey:  () => "ollama",
+    baseURL: () => process.env.OLLAMA_BASE_URL  || "http://ollama:11434/v1",
+    model:   () => process.env.OLLAMA_MODEL     || "llama3.1:8b",
+  },
+  "github-copilot": {
+    apiKey:  () => process.env.COPILOT_TOKEN    || "",
+    baseURL: () => "https://api.githubcopilot.com",
+    model:   () => process.env.COPILOT_MODEL    || "gpt-4o",
+  },
+  groq: {
+    apiKey:  () => process.env.GROQ_API_KEY     || "",
+    baseURL: () => process.env.GROQ_BASE_URL    || "https://api.groq.com/openai/v1",
+    model:   () => process.env.GROQ_MODEL       || "llama-3.3-70b-versatile",
+  },
+  anthropic: {
+    apiKey:  () => process.env.ANTHROPIC_API_KEY  || "",
+    baseURL: () => process.env.ANTHROPIC_BASE_URL || "https://api.anthropic.com/v1",
+    model:   () => process.env.ANTHROPIC_MODEL    || "claude-3-5-sonnet-20241022",
+  },
+};
+
+const VALID_PROVIDERS = new Set(Object.keys(PROVIDER_REGISTRY));
+
+// Backward compat: LLM_PROVIDER → DEFAULT_PROVIDER
+const DEFAULT_PROVIDER = process.env.DEFAULT_PROVIDER
+  || process.env.LLM_PROVIDER
+  || "nvidia";
+
+// ── Startup Env-Check ──────────────────────────────────────
+const PROVIDER_KEY_REQUIREMENTS = {
+  nvidia:        "NVIDIA_API_KEY",
+  "opencode-go": "OPENCODE_API_KEY",
+  groq:          "GROQ_API_KEY",
+  anthropic:     "ANTHROPIC_API_KEY",
+};
 
 const REQUIRED_ENV = ["ALLOWED_TOKEN", "FRONTEND_ORIGIN"];
-if (PROVIDER === "nvidia") REQUIRED_ENV.push("NVIDIA_API_KEY"); // nur bei nvidia nötig
+if (!VALID_PROVIDERS.has(DEFAULT_PROVIDER)) {
+  console.error(`FATAL: DEFAULT_PROVIDER "${DEFAULT_PROVIDER}" unbekannt. Erlaubt: ${[...VALID_PROVIDERS].join(", ")}`);
+  process.exit(1);
+}
+const providerKeyReq = PROVIDER_KEY_REQUIREMENTS[DEFAULT_PROVIDER];
+if (providerKeyReq) REQUIRED_ENV.push(providerKeyReq);
 
 for (const key of REQUIRED_ENV) {
   if (!process.env[key]) {
@@ -23,7 +76,11 @@ for (const key of REQUIRED_ENV) {
   }
 }
 
-// ── FIM-Check ─────────────────────────────────────────────
+if (DEFAULT_PROVIDER === "github-copilot" && !process.env.GITHUB_CLIENT_ID) {
+  console.warn("WARN: DEFAULT_PROVIDER=github-copilot aber GITHUB_CLIENT_ID fehlt — /auth/github wird nicht funktionieren.");
+}
+
+// ── FIM-Check ──────────────────────────────────────────────
 const HASHES_FILE = path.join(__dirname, ".fim_hashes.json");
 
 function fimCheck() {
@@ -49,39 +106,38 @@ function fimCheck() {
   console.log("FIM: OK ✓");
 }
 
-fimCheck(); // ← wird aufgerufen
+fimCheck();
 
-// ── Provider Setup ────────────────────────────────────────
-const client = new OpenAI({
-  apiKey: PROVIDER === "nvidia" ? process.env.NVIDIA_API_KEY : "ollama",
-  baseURL: PROVIDER === "nvidia"
-    ? "https://integrate.api.nvidia.com/v1"
-    : "http://ollama:11434/v1",
-});
+// ── Per-Request Provider Client Factory ───────────────────
+function getProviderClient(providerName) {
+  if (!VALID_PROVIDERS.has(providerName)) return null;
+  const cfg = PROVIDER_REGISTRY[providerName];
+  return {
+    client: new OpenAI({ apiKey: cfg.apiKey(), baseURL: cfg.baseURL() }),
+    model:  cfg.model(),
+  };
+}
 
-const MODEL = PROVIDER === "nvidia"
-  ? (process.env.NVIDIA_MODEL || "moonshotai/kimi-k2-instruct-0905")
-  : (process.env.OLLAMA_MODEL || "llama3.1:8b");
-
-// ── Express ───────────────────────────────────────────────
+// ── Express ────────────────────────────────────────────────
 const app = express();
 
-app.set("trust proxy", 1); // Cloudflare Tunnel → korrekte Client-IP für Rate Limiting
+app.set("trust proxy", 1);
 app.use(helmet());
 app.use(cors({ origin: process.env.FRONTEND_ORIGIN }));
 app.use(express.json({ limit: "10mb" }));
 
-// Health — VOR Auth (Wazuh/Monitoring kann pollen ohne Token)
-app.get("/health", (_req, res) =>
-  res.json({ status: "ok" }) // kein provider/model nach außen
-);
+// 1. Health — keine Auth
+app.get("/health", (_req, res) => res.json({ status: "ok" }));
 
-// Auth Guard — timing-safe Vergleich (verhindert Timing-Angriffe)
+// 2. Auth routes — VOR ALLOWED_TOKEN Guard (GitHub OAuth callback kommt ohne Bearer)
+app.use("/auth", createAuthRouter());
+
+// 3. Auth Guard — timing-safe
 function timingSafeCompare(a, b) {
   const bufA = Buffer.from(a);
   const bufB = Buffer.from(b);
   if (bufA.length !== bufB.length) {
-    crypto.timingSafeEqual(bufA, bufA); // gleiche Zeit, false zurück
+    crypto.timingSafeEqual(bufA, bufA);
     return false;
   }
   return crypto.timingSafeEqual(bufA, bufB);
@@ -95,17 +151,39 @@ app.use((req, res, next) => {
   next();
 });
 
-// Rate Limit — CVE-2026-30827 Fix: ipKeyGenerator (eingebaut in express-rate-limit ^8.3.0)
+// 4. Rate Limit auf /api/chat — CVE-2026-30827 Fix
 app.use("/api/chat", rateLimit({
   windowMs: 60_000,
-  max: 10,
+  max: 20,
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: ipKeyGenerator,
 }));
 
-// Chat Endpoint
+// 5. Provider Info Endpoints
+app.get("/api/providers", (_req, res) => {
+  res.json({
+    default:   DEFAULT_PROVIDER,
+    available: [...VALID_PROVIDERS],
+  });
+});
+
+app.get("/api/models", (req, res) => {
+  const providerName = req.headers["x-provider"] || DEFAULT_PROVIDER;
+  const cfg = PROVIDER_REGISTRY[providerName];
+  if (!cfg) return res.status(400).json({ error: `Unbekannter Provider: ${providerName}` });
+  res.json({
+    provider: providerName,
+    model:    cfg.model(),
+  });
+});
+
+// 6. Chat Endpoint
 app.post("/api/chat", async (req, res) => {
+  const providerName = req.headers["x-provider"] || DEFAULT_PROVIDER;
+  const pc = getProviderClient(providerName);
+  if (!pc) return res.status(400).json({ error: `Unbekannter Provider: ${providerName}` });
+
   const { messages, system } = req.body;
   const max_tokens = Math.min(req.body.max_tokens ?? 1000, 4000);
 
@@ -119,8 +197,8 @@ app.post("/api/chat", async (req, res) => {
   }
 
   try {
-    const response = await client.chat.completions.create({
-      model: MODEL,
+    const response = await pc.client.chat.completions.create({
+      model: pc.model,
       messages: [
         system ? { role: "system", content: system } : null,
         ...messages,
@@ -129,8 +207,10 @@ app.post("/api/chat", async (req, res) => {
     });
 
     res.json({
-      content: response.choices[0].message.content,
-      usage: response.usage,
+      content:  response.choices[0].message.content,
+      usage:    response.usage,
+      provider: providerName,
+      model:    pc.model,
     });
   } catch (err) {
     console.error("LLM Error:", err.message);
@@ -138,6 +218,9 @@ app.post("/api/chat", async (req, res) => {
   }
 });
 
+// 7. Agent Proxy
+app.use("/api/agent", createAgentRouter());
+
 app.listen(process.env.PORT || 3010, () =>
-  console.log(`✓ Backend | Provider: ${PROVIDER} | Model: ${MODEL}`)
+  console.log(`✓ Backend | Provider: ${DEFAULT_PROVIDER} | Model: ${PROVIDER_REGISTRY[DEFAULT_PROVIDER].model()}`)
 );
