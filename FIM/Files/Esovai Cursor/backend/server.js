@@ -172,14 +172,63 @@ app.get("/api/providers", (_req, res) => {
   });
 });
 
-app.get("/api/models", (req, res) => {
+// models.dev Cache — stündlich aktualisiert
+let modelsCache = { data: null, fetchedAt: 0 };
+
+async function getModelsFromDev() {
+  const now = Date.now();
+  if (modelsCache.data && now - modelsCache.fetchedAt < 60 * 60 * 1000) {
+    return modelsCache.data;
+  }
+  try {
+    const res = await fetch("https://models.dev/api.json", {
+      headers: { "User-Agent": "KimiKami/1.0" },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) throw new Error(`models.dev status ${res.status}`);
+    const data = await res.json();
+    modelsCache = { data, fetchedAt: now };
+    return data;
+  } catch (err) {
+    console.warn("models.dev fetch fehlgeschlagen:", err.message);
+    return modelsCache.data || {};
+  }
+}
+
+// GET /api/models — Modelle für einen Provider von models.dev
+app.get("/api/models", async (req, res) => {
   const providerName = req.headers["x-provider"] || DEFAULT_PROVIDER;
   const cfg = PROVIDER_REGISTRY[providerName];
   if (!cfg) return res.status(400).json({ error: `Unbekannter Provider: ${providerName}` });
-  res.json({
-    provider: providerName,
-    model:    cfg.model(),
-  });
+
+  try {
+    const allModels = await getModelsFromDev();
+    // models.dev gibt Objekt: { "openai": { models: [...] }, ... }
+    const providerModels = allModels[providerName]?.models || [];
+    res.json({
+      provider: providerName,
+      default:  cfg.model(),
+      models:   providerModels.length > 0
+        ? providerModels.map(m => ({ id: m.id, name: m.name || m.id }))
+        : [{ id: cfg.model(), name: cfg.model() }],
+    });
+  } catch (err) {
+    res.json({
+      provider: providerName,
+      default:  cfg.model(),
+      models:   [{ id: cfg.model(), name: cfg.model() }],
+    });
+  }
+});
+
+// GET /api/models/all — alle Provider + Modelle von models.dev
+app.get("/api/models/all", async (_req, res) => {
+  try {
+    const allModels = await getModelsFromDev();
+    res.json(allModels);
+  } catch (err) {
+    res.status(500).json({ error: "models.dev nicht erreichbar" });
+  }
 });
 
 // 6. Chat Endpoint
@@ -188,6 +237,8 @@ app.post("/api/chat", async (req, res) => {
   const pc = getProviderClient(providerName);
   if (!pc) return res.status(400).json({ error: `Unbekannter Provider: ${providerName}` });
   if (pc.error) return res.status(400).json({ error: pc.error });
+  // X-Model Header überschreibt das Provider-Default-Modell
+  const model = req.headers["x-model"] || pc.model;
 
   const { messages, system } = req.body;
   const max_tokens = Math.min(req.body.max_tokens ?? 1000, 4000);
@@ -203,7 +254,7 @@ app.post("/api/chat", async (req, res) => {
 
   try {
     const response = await pc.client.chat.completions.create({
-      model: pc.model,
+      model,
       messages: [
         system ? { role: "system", content: system } : null,
         ...messages,
@@ -215,7 +266,7 @@ app.post("/api/chat", async (req, res) => {
       content:  response.choices[0].message.content,
       usage:    response.usage,
       provider: providerName,
-      model:    pc.model,
+      model,
     });
   } catch (err) {
     console.error("LLM Error:", err.message);
