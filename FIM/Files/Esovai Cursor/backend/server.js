@@ -15,7 +15,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // ── Provider Registry ──────────────────────────────────────
 const PROVIDER_REGISTRY = {
   nvidia: {
-    apiKey:  () => process.env.NVIDIA_API_KEY  || "nvidia",
+    apiKey:  () => process.env.NVIDIA_API_KEY  || "",
     baseURL: () => "https://integrate.api.nvidia.com/v1",
     model:   () => process.env.NVIDIA_MODEL    || "moonshotai/kimi-k2-instruct-0905",
   },
@@ -55,7 +55,6 @@ const PROVIDER_KEY_REQUIREMENTS = {
   nvidia:        "NVIDIA_API_KEY",
   "opencode-go": "OPENCODE_API_KEY",
   groq:          "GROQ_API_KEY",
-  anthropic:     "ANTHROPIC_API_KEY",
 };
 
 const REQUIRED_ENV = ["ALLOWED_TOKEN", "FRONTEND_ORIGIN"];

@@ -3,8 +3,6 @@
 # Nach docker compose up: nur kimi-frontend ins Netz des MCP-cloudflared hängen, z. B.:
 #   docker network connect <NETZNAME> kimi-frontend
 
-version: "3.8"
-
 services:
   backend:
     build: ./backend

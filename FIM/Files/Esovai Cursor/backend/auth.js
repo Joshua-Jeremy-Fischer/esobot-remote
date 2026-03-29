@@ -1,7 +1,5 @@
 import express from "express";
 import crypto from "crypto";
-import fs from "fs";
-import path from "path";
 
 // ── Crypto helpers (AES-256-GCM) ──────────────────────────
 function deriveKey() {
