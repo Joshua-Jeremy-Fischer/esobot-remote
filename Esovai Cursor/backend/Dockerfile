@@ -10,20 +10,11 @@ COPY package*.json ./
 # npm ci bevorzugt (benötigt package-lock.json); fallback: npm install --omit=dev
 RUN if [ -f package-lock.json ]; then npm ci --omit=dev; else npm install --omit=dev; fi
 
-COPY server.js ./
+COPY server.js agent.js auth.js ./
+COPY scripts/ ./scripts/
 
-# FIM-Hashes beim Build generieren (nur server.js)
-RUN node -e "
-const crypto = require('crypto');
-const fs = require('fs');
-const files = ['server.js'];
-const hashes = {};
-for (const f of files) {
-  hashes[f] = crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex');
-}
-fs.writeFileSync('.fim_hashes.json', JSON.stringify(hashes, null, 2));
-console.log('FIM hashes generated:', JSON.stringify(hashes, null, 2));
-"
+# FIM-Hashes beim Build (kein mehrzeiliges RUN node -e — das bricht den Dockerfile-Parser)
+RUN node scripts/fim-gen.cjs
 
 USER nodejs
 EXPOSE 3010

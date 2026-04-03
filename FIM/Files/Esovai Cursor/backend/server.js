@@ -39,16 +39,45 @@ const PROVIDER_REGISTRY = {
     baseURL: () => process.env.GROQ_BASE_URL    || "https://api.groq.com/openai/v1",
     model:   () => process.env.GROQ_MODEL       || "llama-3.3-70b-versatile",
   },
+  /** OpenAI-kompatibel (LM Studio, vLLM, …) — CUSTOM_BASE_URL in .env */
+  custom: {
+    apiKey:  () => process.env.CUSTOM_API_KEY   || "lm-studio",
+    baseURL: () => {
+      let u = (process.env.CUSTOM_BASE_URL || "").trim().replace(/\/$/, "");
+      if (!u) return "";
+      if (!/\/v1$/i.test(u)) u += "/v1";
+      return u;
+    },
+    model:   () => process.env.CUSTOM_MODEL      || "local-model",
+  },
   // HINWEIS: Anthropic nutzt /v1/messages (kein OpenAI-Format) — noch nicht unterstützt
   // anthropic: { ... },
 };
 
+/** UI-IDs (models.dev / Kimikami) → interner Provider */
+const PROVIDER_ALIASES = {
+  "opencode-zen": "opencode-go",
+  lmstudio:       "custom",
+};
+
 const VALID_PROVIDERS = new Set(Object.keys(PROVIDER_REGISTRY));
+
+function resolveProviderName(name) {
+  const n = (name || "").trim();
+  if (!n) return DEFAULT_PROVIDER;
+  return PROVIDER_ALIASES[n] || n;
+}
 
 // Backward compat: LLM_PROVIDER → DEFAULT_PROVIDER
 const DEFAULT_PROVIDER = process.env.DEFAULT_PROVIDER
   || process.env.LLM_PROVIDER
   || "nvidia";
+
+// Chat Token-Limits (konfigurierbar per .env)
+// - CHAT_DEFAULT_MAX_TOKENS: Default pro Request (falls kein req.body.max_tokens gesetzt ist)
+// - CHAT_MAX_TOKENS_CAP: harte Obergrenze; 0 oder negativ = kein Cap
+const CHAT_DEFAULT_MAX_TOKENS = Number(process.env.CHAT_DEFAULT_MAX_TOKENS ?? 2000);
+const CHAT_MAX_TOKENS_CAP = Number(process.env.CHAT_MAX_TOKENS_CAP ?? 12000);
 
 // ── Startup Env-Check ──────────────────────────────────────
 const PROVIDER_KEY_REQUIREMENTS = {
@@ -106,14 +135,19 @@ fimCheck();
 
 // ── Per-Request Provider Client Factory ───────────────────
 function getProviderClient(providerName) {
-  if (!VALID_PROVIDERS.has(providerName)) return null;
-  const cfg = PROVIDER_REGISTRY[providerName];
+  const resolved = resolveProviderName(providerName);
+  if (!VALID_PROVIDERS.has(resolved)) return null;
+  const cfg = PROVIDER_REGISTRY[resolved];
   const apiKey = cfg.apiKey();
-  // Prüfen ob Key vorhanden (außer ollama, das keinen Key braucht)
-  if (providerName !== "ollama" && providerName !== "github-copilot" && !apiKey) {
-    return { error: `API Key für Provider "${providerName}" fehlt in .env` };
+  if (resolved === "custom") {
+    const base = (process.env.CUSTOM_BASE_URL || "").trim();
+    if (!base) return { error: "CUSTOM_BASE_URL fehlt in .env (OpenAI-kompatibler Endpoint)" };
   }
-  if (providerName === "github-copilot" && !apiKey) {
+  // Prüfen ob Key vorhanden (außer ollama, das keinen Key braucht)
+  if (resolved !== "ollama" && resolved !== "github-copilot" && resolved !== "custom" && !apiKey) {
+    return { error: `API Key für Provider "${resolved}" fehlt in .env` };
+  }
+  if (resolved === "github-copilot" && !apiKey) {
     return { error: "GitHub Copilot nicht verbunden — zuerst /auth/github aufrufen" };
   }
   return {
@@ -164,7 +198,7 @@ app.use("/api/chat", rateLimit({
   legacyHeaders: false,
 }));
 
-// Agent-Proxy (eso-bot): teurer als reiner Chat → eigenes Limit
+// Agent (in-process, kein eso-bot-Container): teurer als reiner Chat → eigenes Limit
 app.use("/api/agent", rateLimit({
   windowMs: 60_000,
   max: 15,
@@ -205,14 +239,16 @@ async function getModelsFromDev() {
 
 // GET /api/models — Modelle für einen Provider von models.dev
 app.get("/api/models", async (req, res) => {
-  const providerName = req.headers["x-provider"] || DEFAULT_PROVIDER;
+  const rawName = req.headers["x-provider"] || DEFAULT_PROVIDER;
+  const providerName = resolveProviderName(rawName);
   const cfg = PROVIDER_REGISTRY[providerName];
   if (!cfg) return res.status(400).json({ error: `Unbekannter Provider: ${providerName}` });
 
   try {
     const allModels = await getModelsFromDev();
     // models.dev gibt Objekt: { "openai": { models: [...] }, ... }
-    const providerModels = allModels[providerName]?.models || [];
+    const devKey = rawName in allModels ? rawName : providerName;
+    const providerModels = allModels[devKey]?.models || [];
     res.json({
       provider: providerName,
       default:  cfg.model(),
@@ -249,7 +285,13 @@ app.post("/api/chat", async (req, res) => {
   const model = req.headers["x-model"] || pc.model;
 
   const { messages, system } = req.body;
-  const max_tokens = Math.min(req.body.max_tokens ?? 1000, 4000);
+  const requestedMaxTokens = Number(req.body.max_tokens ?? CHAT_DEFAULT_MAX_TOKENS);
+  const safeRequestedMaxTokens = Number.isFinite(requestedMaxTokens) && requestedMaxTokens > 0
+    ? requestedMaxTokens
+    : CHAT_DEFAULT_MAX_TOKENS;
+  const max_tokens = CHAT_MAX_TOKENS_CAP > 0
+    ? Math.min(safeRequestedMaxTokens, CHAT_MAX_TOKENS_CAP)
+    : safeRequestedMaxTokens;
 
   if (!Array.isArray(messages) || messages.length === 0) {
     return res.status(400).json({ error: "messages[] fehlt oder leer" });
@@ -282,8 +324,73 @@ app.post("/api/chat", async (req, res) => {
   }
 });
 
-// 7. Agent Proxy (Rate-Limit siehe oben auf /api/agent)
-app.use("/api/agent", createAgentRouter());
+// 6a. Base44-Compat: Karteikarten / InvokeLLM → strukturiertes JSON vom aktuellen Provider
+app.post("/api/invoke-llm", async (req, res) => {
+  const providerName = req.headers["x-provider"] || DEFAULT_PROVIDER;
+  const pc = getProviderClient(providerName);
+  if (!pc) return res.status(400).json({ error: `Unbekannter Provider: ${providerName}` });
+  if (pc.error) return res.status(400).json({ error: pc.error });
+  const model = req.headers["x-model"] || pc.model;
+  const { prompt, response_json_schema } = req.body ?? {};
+  if (typeof prompt !== "string" || !prompt.trim()) {
+    return res.status(400).json({ error: "prompt (string) fehlt" });
+  }
+  const cap = Number(process.env.INVOKE_LLM_MAX_TOKENS ?? 8192);
+  const max_tokens = Number.isFinite(cap) && cap > 0 ? cap : 8192;
+  let system = "Du antwortest ausschließlich mit EINEM gültigen JSON-Objekt (kein Markdown, keine Code-Fences, kein Text davor oder danach).";
+  if (response_json_schema) {
+    system += " Erfülle diese JSON-Struktur: " + JSON.stringify(response_json_schema).slice(0, 6000);
+  }
+  try {
+    const response = await pc.client.chat.completions.create({
+      model,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: prompt },
+      ],
+      max_tokens,
+    });
+    let raw = (response.choices[0].message.content || "").trim();
+    raw = raw.replace(/^```(?:json)?\s*/i, "").replace(/```$/m, "").trim();
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      const m = raw.match(/\{[\s\S]*\}/);
+      if (m) parsed = JSON.parse(m[0]);
+      else throw new Error("Kein JSON in der Modellantwort");
+    }
+    return res.json(parsed);
+  } catch (err) {
+    console.error("invoke-llm:", err.message);
+    return res.status(500).json({ error: err.message || "invoke-llm fehlgeschlagen" });
+  }
+});
+
+// 6b. Base44-Compat: Server-Functions (Frontend ruft Gl.functions.invoke → /api/functions/:name)
+// Ohne Base44-Cloud: sinnvolle Defaults, damit die UI nicht abstürzt.
+app.post("/api/functions/:name", (req, res) => {
+  const name = req.params.name;
+  if (name === "githubCopilotAuth") {
+    return res.json({
+      error: "github_copilot_auth_via_base44_disabled",
+      hint: "GitHub-Anmeldung für das Backend: /auth/github (OAuth). Copilot-Token in .env: COPILOT_TOKEN.",
+    });
+  }
+  res.status(404).json({ error: `Unbekannte Function: ${name}` });
+});
+
+// 7. Agent (Rate-Limit siehe oben auf /api/agent)
+app.use(
+  "/api/agent",
+  createAgentRouter({
+    getProviderClient,
+    resolveProviderName,
+    defaultProvider: DEFAULT_PROVIDER,
+    chatDefaultMaxTokens: CHAT_DEFAULT_MAX_TOKENS,
+    chatMaxTokensCap: CHAT_MAX_TOKENS_CAP,
+  })
+);
 
 app.listen(process.env.PORT || 3010, () =>
   console.log(`✓ Backend | Provider: ${DEFAULT_PROVIDER} | Model: ${PROVIDER_REGISTRY[DEFAULT_PROVIDER].model()}`)

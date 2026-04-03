@@ -1,69 +1,127 @@
 import express from "express";
 
-const ESO_BOT_BASE  = process.env.AGENT_BASE_URL  || "http://eso-bot:3020";
-const ESO_BOT_TOKEN = process.env.ESO_BOT_TOKEN  || "";
+/** @typedef {{ getProviderClient: (name: string) => any, resolveProviderName: (name: string) => string, defaultProvider: string, chatDefaultMaxTokens: number, chatMaxTokensCap: number }} AgentDeps */
 
-export function createAgentRouter() {
+// ── Permissions (wie eso-bot/permissions.js, In-Memory) ──────────
+const CEILING = {
+  shell: process.env.ALLOW_SHELL === "true",
+  web:   process.env.ALLOW_WEB !== "false",
+  files: process.env.ALLOW_FILES !== "false",
+  git:   process.env.ALLOW_GIT === "true",
+};
+
+const permissions = { ...CEILING };
+
+function getPermissions() {
+  return { ...permissions };
+}
+
+function getCeiling() {
+  return { ...CEILING };
+}
+
+function setPermissions(updates) {
+  for (const [key, val] of Object.entries(updates)) {
+    if (!(key in permissions)) continue;
+    const requested = Boolean(val);
+    permissions[key] = requested && CEILING[key];
+  }
+  return { ...permissions };
+}
+
+// ── UI `filesystem` ↔ intern `files` ───────────────────────────────
+function permissionsToUi(data) {
+  if (!data || typeof data !== "object") return {};
+  const cur = data.current ?? data.permissions ?? data;
+  return {
+    shell:      !!cur.shell,
+    web:        !!cur.web,
+    filesystem: !!cur.files,
+    git:        !!cur.git,
+  };
+}
+
+function permissionsFromUi(body) {
+  const out = { ...body };
+  if (Object.prototype.hasOwnProperty.call(out, "filesystem")) {
+    out.files = out.filesystem;
+    delete out.filesystem;
+  }
+  return out;
+}
+
+/** @param {AgentDeps} deps */
+export function createAgentRouter(deps) {
+  const {
+    getProviderClient,
+    resolveProviderName,
+    defaultProvider,
+    chatDefaultMaxTokens,
+    chatMaxTokensCap,
+  } = deps;
+
   const router = express.Router();
 
-  // POST /api/agent — Task an Eso Bot übergeben
+  const AGENT_MAX_TOKENS = Number(process.env.AGENT_MAX_TOKENS ?? 4000);
+
+  // POST /api/agent — eine LLM-Runde (kein Sandbox/Tool-Loop ohne eso-bot)
   router.post("/", async (req, res) => {
-    const { messages, system, maxIterations, model } = req.body;
+    const { messages, system } = req.body;
 
     if (!Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: "messages[] fehlt oder leer" });
     }
-
-    try {
-      const response = await fetch(`${ESO_BOT_BASE}/task`, {
-        method:  "POST",
-        headers: {
-          "Content-Type":  "application/json",
-          ...(ESO_BOT_TOKEN ? { "Authorization": `Bearer ${ESO_BOT_TOKEN}` } : {}),
-        },
-        body:    JSON.stringify({ messages, system, maxIterations, model }),
-        signal:  AbortSignal.timeout(120_000), // 2 Minuten max
-      });
-
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({}));
-        return res.status(response.status).json({ error: err.error || "Eso Bot Fehler" });
+    for (const m of messages) {
+      if (!m.role || typeof m.content !== "string") {
+        return res.status(400).json({ error: "Ungültiges messages-Format" });
       }
+    }
 
-      res.json(await response.json());
+    const providerName = resolveProviderName(req.headers["x-provider"] || defaultProvider);
+    const pc = getProviderClient(providerName);
+    if (!pc) return res.status(400).json({ error: `Unbekannter Provider: ${providerName}` });
+    if (pc.error) return res.status(400).json({ error: pc.error });
+
+    const model =
+      (typeof req.body.model === "string" && req.body.model.trim()) || req.headers["x-model"] || pc.model;
+
+    const requestedMax = Number(req.body.max_tokens ?? chatDefaultMaxTokens);
+    const safeReq =
+      Number.isFinite(requestedMax) && requestedMax > 0 ? requestedMax : chatDefaultMaxTokens;
+    const max_tokens =
+      chatMaxTokensCap > 0 ? Math.min(safeReq, chatMaxTokensCap, AGENT_MAX_TOKENS) : Math.min(safeReq, AGENT_MAX_TOKENS);
+
+    try {
+      const response = await pc.client.chat.completions.create({
+        model,
+        messages: [
+          system ? { role: "system", content: system } : null,
+          ...messages,
+        ].filter(Boolean),
+        max_tokens,
+      });
+
+      const msg = response.choices[0].message;
+      return res.json({
+        content:    msg.content || "",
+        toolCalls:  [],
+        iterations: 1,
+        model,
+      });
     } catch (err) {
-      console.error("[AGENT PROXY]", err.message);
-      res.status(502).json({ error: "Eso Bot nicht erreichbar" });
+      console.error("[AGENT]", err.message);
+      return res.status(500).json({ error: err.message || "Agent-Anfrage fehlgeschlagen" });
     }
   });
 
-  // GET /api/agent/permissions
-  router.get("/permissions", async (_req, res) => {
-    try {
-      const response = await fetch(`${ESO_BOT_BASE}/permissions`, {
-        headers: { ...(ESO_BOT_TOKEN ? { "Authorization": `Bearer ${ESO_BOT_TOKEN}` } : {}) },
-      });
-      res.json(await response.json());
-    } catch (err) {
-      res.status(502).json({ error: "Eso Bot nicht erreichbar" });
-    }
+  router.get("/permissions", (_req, res) => {
+    return res.json(permissionsToUi({ current: getPermissions(), ceiling: getCeiling() }));
   });
 
-  // POST /api/agent/permissions
-  router.post("/permissions", async (req, res) => {
-    try {
-      const response = await fetch(`${ESO_BOT_BASE}/permissions`, {
-        method:  "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(ESO_BOT_TOKEN ? { "Authorization": `Bearer ${ESO_BOT_TOKEN}` } : {}),
-        },
-        body: JSON.stringify(req.body),
-      });
-      res.json(await response.json());
-    } catch (err) {
-      res.status(502).json({ error: "Eso Bot nicht erreichbar" });
-    }
+  router.post("/permissions", (req, res) => {
+    const payload = permissionsFromUi(req.body || {});
+    const updated = setPermissions(payload);
+    return res.json(permissionsToUi({ current: updated }));
   });
 
   return router;
