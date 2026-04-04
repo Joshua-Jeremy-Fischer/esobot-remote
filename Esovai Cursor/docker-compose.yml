@@ -45,29 +45,6 @@ services:
     networks:
       - app-net
 
-  eso-bot:
-    build: ./eso-bot
-    container_name: eso-bot
-    restart: unless-stopped
-    env_file: .env
-    environment:
-      AGENT_PORT: "3020"
-      SANDBOX_ROOT: /workspace
-      LLM_BASE_URL: "http://ollama:11434/v1"
-      LLM_API_KEY: "ollama"
-      LLM_MODEL: "kimi-k2.5:cloud"
-      ALLOW_SHELL: "false"
-      ALLOW_WEB: "true"
-      ALLOW_FILES: "true"
-      ALLOW_GIT: "false"
-    volumes:
-      - eso_workspace:/workspace
-    cap_drop: [ALL]
-    cap_add: []
-    security_opt:
-      - no-new-privileges:true
-    networks:
-      - app-net
 
   ollama:
     image: ollama/ollama
@@ -87,5 +64,4 @@ networks:
 
 volumes:
   ollama_data:
-  eso_workspace:
   kimi_data:
