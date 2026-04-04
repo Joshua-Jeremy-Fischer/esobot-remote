@@ -31,56 +31,51 @@ function makeLLMClient(overrideModel) {
   return { client: new OpenAI({ apiKey, baseURL }), model: overrideModel || model };
 }
 
-// ── Web Search (Tavily → Serper → Brave → DuckDuckGo) ─────
-async function webSearch(query) {
-  // 1. Tavily
-  if (process.env.TAVILY_API_KEY) {
-    try {
-      const r = await fetch("https://api.tavily.com/search", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ api_key: process.env.TAVILY_API_KEY, query, max_results: 5 }),
-        signal: AbortSignal.timeout(10_000),
-      });
-      const d = await r.json();
-      if (d.results?.length) {
-        return { source: "tavily", results: d.results.map(x => ({ title: x.title, url: x.url, snippet: x.content?.slice(0, 500) })) };
-      }
-    } catch {}
+// ── Web Search Provider Store ──────────────────────────────
+// "auto" = Fallback-Kette, oder explizit: "tavily"|"serper"|"brave"|"duckduckgo"
+let preferredSearchProvider = process.env.SEARCH_PROVIDER || "auto";
+
+async function webSearch(query, forceProvider) {
+  const provider = forceProvider || preferredSearchProvider;
+
+  async function tryTavily() {
+    if (!process.env.TAVILY_API_KEY) return null;
+    const r = await fetch("https://api.tavily.com/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_key: process.env.TAVILY_API_KEY, query, max_results: 5 }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    const d = await r.json();
+    if (!d.results?.length) return null;
+    return { source: "tavily", results: d.results.map(x => ({ title: x.title, url: x.url, snippet: x.content?.slice(0, 500) })) };
   }
 
-  // 2. Serper (Google)
-  if (process.env.SERPER_API_KEY) {
-    try {
-      const r = await fetch("https://google.serper.dev/search", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-API-KEY": process.env.SERPER_API_KEY },
-        body: JSON.stringify({ q: query, num: 5 }),
-        signal: AbortSignal.timeout(10_000),
-      });
-      const d = await r.json();
-      if (d.organic?.length) {
-        return { source: "serper", results: d.organic.map(x => ({ title: x.title, url: x.link, snippet: x.snippet })) };
-      }
-    } catch {}
+  async function trySerper() {
+    if (!process.env.SERPER_API_KEY) return null;
+    const r = await fetch("https://google.serper.dev/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-API-KEY": process.env.SERPER_API_KEY },
+      body: JSON.stringify({ q: query, num: 5 }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    const d = await r.json();
+    if (!d.organic?.length) return null;
+    return { source: "serper", results: d.organic.map(x => ({ title: x.title, url: x.link, snippet: x.snippet })) };
   }
 
-  // 3. Brave
-  if (process.env.BRAVE_API_KEY) {
-    try {
-      const r = await fetch(`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=5`, {
-        headers: { "Accept": "application/json", "X-Subscription-Token": process.env.BRAVE_API_KEY },
-        signal: AbortSignal.timeout(10_000),
-      });
-      const d = await r.json();
-      if (d.web?.results?.length) {
-        return { source: "brave", results: d.web.results.map(x => ({ title: x.title, url: x.url, snippet: x.description })) };
-      }
-    } catch {}
+  async function tryBrave() {
+    if (!process.env.BRAVE_API_KEY) return null;
+    const r = await fetch(`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=5`, {
+      headers: { "Accept": "application/json", "X-Subscription-Token": process.env.BRAVE_API_KEY },
+      signal: AbortSignal.timeout(10_000),
+    });
+    const d = await r.json();
+    if (!d.web?.results?.length) return null;
+    return { source: "brave", results: d.web.results.map(x => ({ title: x.title, url: x.url, snippet: x.description })) };
   }
 
-  // 4. DuckDuckGo (kein Key nötig)
-  try {
+  async function tryDuckDuckGo() {
     const r = await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`, {
       signal: AbortSignal.timeout(10_000),
     });
@@ -90,9 +85,26 @@ async function webSearch(query) {
     for (const t of (d.RelatedTopics || []).slice(0, 4)) {
       if (t.FirstURL) results.push({ title: t.Text?.slice(0, 80), url: t.FirstURL, snippet: t.Text?.slice(0, 300) });
     }
-    if (results.length) return { source: "duckduckgo", results };
-  } catch {}
+    return results.length ? { source: "duckduckgo", results } : null;
+  }
 
+  const providers = { tavily: tryTavily, serper: trySerper, brave: tryBrave, duckduckgo: tryDuckDuckGo };
+
+  // Expliziter Provider gewählt
+  if (provider !== "auto" && providers[provider]) {
+    try {
+      const result = await providers[provider]();
+      if (result) return result;
+      return { error: `Provider "${provider}" hat keine Ergebnisse geliefert (Key vorhanden?)` };
+    } catch (e) {
+      return { error: `Provider "${provider}" Fehler: ${e.message}` };
+    }
+  }
+
+  // Auto: Fallback-Kette
+  for (const fn of [tryTavily, trySerper, tryBrave, tryDuckDuckGo]) {
+    try { const r = await fn(); if (r) return r; } catch {}
+  }
   return { error: "Alle Suchanbieter fehlgeschlagen" };
 }
 
@@ -250,6 +262,29 @@ async function executeTool(name, args) {
 // ── Router ─────────────────────────────────────────────────
 export function createAgentRouter() {
   const router = express.Router();
+
+  // GET /api/agent/search-providers — welche Provider verfügbar sind + aktiver
+  router.get("/search-providers", (_req, res) => {
+    res.json({
+      active: preferredSearchProvider,
+      available: [
+        { id: "auto",       label: "Auto (Fallback-Kette)",  configured: true },
+        { id: "tavily",     label: "Tavily",                 configured: !!process.env.TAVILY_API_KEY },
+        { id: "serper",     label: "Serper (Google)",        configured: !!process.env.SERPER_API_KEY },
+        { id: "brave",      label: "Brave Search",           configured: !!process.env.BRAVE_API_KEY },
+        { id: "duckduckgo", label: "DuckDuckGo",             configured: true },
+      ],
+    });
+  });
+
+  // POST /api/agent/search-providers — aktiven Provider setzen
+  router.post("/search-providers", (req, res) => {
+    const { provider } = req.body;
+    const valid = ["auto", "tavily", "serper", "brave", "duckduckgo"];
+    if (!valid.includes(provider)) return res.status(400).json({ error: `Ungültig. Erlaubt: ${valid.join(", ")}` });
+    preferredSearchProvider = provider;
+    res.json({ active: preferredSearchProvider });
+  });
 
   // GET /api/agent/permissions
   router.get("/permissions", (_req, res) => res.json(perms));
