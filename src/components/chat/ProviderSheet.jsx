@@ -3,12 +3,8 @@ import { X, Check } from "lucide-react";
 
 export const PROVIDERS = [
   { id: "base44", label: "Base44 AI ✨", sublabel: "günstig & kostenlos", models: [{ id: "", label: "Base44 AI" }] },
-  { id: "ollama-cloud", label: "Ollama ☁️", sublabel: "Cloud-Abo", models: [
+  { id: "ollama-cloud", label: "Ollama ☁️", sublabel: "Cloud-Abo · Kimi K2.5", models: [
     { id: "kimi-k2.5", label: "Kimi K2.5" },
-    { id: "glm-5", label: "GLM-5" },
-    { id: "minimax-m2.5", label: "MiniMax M2.5" },
-    { id: "qwen3.5-122b", label: "Qwen3.5-122B" },
-    { id: "deepseek-v3.2-exp", label: "DeepSeek V3.2 Exp" },
   ]},
   { id: "ollama", label: "Ollama 🖥️", sublabel: "lokal", models: [
     { id: "kimi-k2.5", label: "Kimi K2.5" },
