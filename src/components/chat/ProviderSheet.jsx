@@ -3,15 +3,31 @@ import { X, Check } from "lucide-react";
 
 export const PROVIDERS = [
   { id: "base44", label: "Base44 AI ✨", sublabel: "günstig & kostenlos", models: [{ id: "", label: "Base44 AI" }] },
-  { id: "ollama-cloud", label: "Ollama ☁️", sublabel: "Cloud-Abo · Kimi K2.5", models: [
-    { id: "kimi-k2.5", label: "Kimi K2.5" },
-  ]},
-  { id: "ollama", label: "Ollama 🖥️", sublabel: "lokal", models: [
-    { id: "kimi-k2.5", label: "Kimi K2.5" },
-    { id: "glm-5", label: "GLM-5" },
-    { id: "minimax-m2.5", label: "MiniMax M2.5" },
-    { id: "qwen3.5-122b", label: "Qwen3.5-122B" },
-    { id: "deepseek-v3.2-exp", label: "DeepSeek V3.2 Exp" },
+  { id: "ollama", label: "Ollama", sublabel: "Lokal & Cloud", localModels: [
+    { id: "llama3", label: "LLaMA 3" },
+    { id: "mistral", label: "Mistral" },
+    { id: "qwen2.5", label: "Qwen2.5" },
+    { id: "phi4", label: "Phi-4" },
+    { id: "gemma3", label: "Gemma 3" },
+  ], cloudModels: [
+    { id: "kimi-k2.5:cloud", label: "Kimi K2.5" },
+    { id: "llama3.3:cloud", label: "LLaMA 3.3" },
+    { id: "gemma3:cloud", label: "Gemma 3" },
+    { id: "qwen2.5:cloud", label: "Qwen2.5" },
+    { id: "mistral:cloud", label: "Mistral" },
+    { id: "phi4:cloud", label: "Phi-4" },
+  ], models: [
+    { id: "llama3", label: "LLaMA 3" },
+    { id: "mistral", label: "Mistral" },
+    { id: "qwen2.5", label: "Qwen2.5" },
+    { id: "phi4", label: "Phi-4" },
+    { id: "gemma3", label: "Gemma 3" },
+    { id: "kimi-k2.5:cloud", label: "Kimi K2.5 ☁️" },
+    { id: "llama3.3:cloud", label: "LLaMA 3.3 ☁️" },
+    { id: "gemma3:cloud", label: "Gemma 3 ☁️" },
+    { id: "qwen2.5:cloud", label: "Qwen2.5 ☁️" },
+    { id: "mistral:cloud", label: "Mistral ☁️" },
+    { id: "phi4:cloud", label: "Phi-4 ☁️" },
   ]},
   { id: "opencode-go", label: "OpenCode Go ⚡", sublabel: "Abo", models: [
     { id: "kimi-k2.5", label: "Kimi K2.5" },
@@ -124,22 +140,63 @@ export default function ProviderSheet({ open, onClose }) {
           {/* Models */}
           {showModels && (
             <div className="px-3 pb-3">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-1">Modell</p>
-              <div className="flex flex-wrap gap-2">
-                {selectedProvider.models.map(m => (
-                  <button
-                    key={m.id}
-                    onClick={() => setSelectedModel(m)}
-                    className={`px-3.5 py-2 rounded-xl text-sm font-medium transition-colors min-h-[40px] ${
-                      selectedModel?.id === m.id
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-secondary text-secondary-foreground"
-                    }`}
-                  >
-                    {m.label}
-                  </button>
-                ))}
-              </div>
+              {selectedProvider.localModels ? (
+                <>
+                  {/* Lokal */}
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-1">🖥️ Lokal</p>
+                  <div className="flex flex-wrap gap-2 mb-4">
+                    {selectedProvider.localModels.map(m => (
+                      <button
+                        key={m.id}
+                        onClick={() => setSelectedModel(m)}
+                        className={`px-3.5 py-2 rounded-xl text-sm font-medium transition-colors min-h-[40px] ${
+                          selectedModel?.id === m.id
+                            ? "bg-primary text-primary-foreground"
+                            : "bg-secondary text-secondary-foreground"
+                        }`}
+                      >
+                        {m.label}
+                      </button>
+                    ))}
+                  </div>
+                  {/* Cloud */}
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-1">☁️ Cloud</p>
+                  <div className="flex flex-wrap gap-2">
+                    {selectedProvider.cloudModels.map(m => (
+                      <button
+                        key={m.id}
+                        onClick={() => setSelectedModel(m)}
+                        className={`px-3.5 py-2 rounded-xl text-sm font-medium transition-colors min-h-[40px] ${
+                          selectedModel?.id === m.id
+                            ? "bg-primary text-primary-foreground"
+                            : "bg-secondary text-secondary-foreground"
+                        }`}
+                      >
+                        {m.label}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-1">Modell</p>
+                  <div className="flex flex-wrap gap-2">
+                    {selectedProvider.models.map(m => (
+                      <button
+                        key={m.id}
+                        onClick={() => setSelectedModel(m)}
+                        className={`px-3.5 py-2 rounded-xl text-sm font-medium transition-colors min-h-[40px] ${
+                          selectedModel?.id === m.id
+                            ? "bg-primary text-primary-foreground"
+                            : "bg-secondary text-secondary-foreground"
+                        }`}
+                      >
+                        {m.label}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
           )}
         </div>
