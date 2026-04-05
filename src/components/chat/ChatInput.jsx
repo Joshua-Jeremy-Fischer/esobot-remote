@@ -21,6 +21,7 @@ export default function ChatInput({ onSend, disabled }) {
   const handleSend = useCallback(() => {
     const trimmed = text.trim();
     if (!trimmed && !imageUrl) return;
+    if (navigator.vibrate) navigator.vibrate(10);
     onSend(trimmed, imageUrl);
     setText("");
     setImageUrl(null);
@@ -75,7 +76,7 @@ export default function ChatInput({ onSend, disabled }) {
 
       <div className="flex items-end gap-2 px-3 py-2">
         <button
-          onClick={() => fileInputRef.current?.click()}
+          onClick={() => { if (navigator.vibrate) navigator.vibrate(10); fileInputRef.current?.click(); }}
           disabled={uploading}
           className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-full bg-secondary text-muted-foreground active:scale-95 transition-transform"
         >

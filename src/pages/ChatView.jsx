@@ -22,6 +22,19 @@ export default function ChatView() {
   const scrollRef = useRef(null);
   const bottomRef = useRef(null);
 
+  // Keyboard-aware: scroll to bottom when virtual keyboard opens
+  useEffect(() => {
+    const handler = () => {
+      if (document.activeElement?.tagName === "TEXTAREA") {
+        setTimeout(() => {
+          bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+        }, 300);
+      }
+    };
+    window.addEventListener("resize", handler);
+    return () => window.removeEventListener("resize", handler);
+  }, []);
+
   const handleProviderClose = () => {
     setProviderOpen(false);
     setActiveProvider(getActiveProvider());

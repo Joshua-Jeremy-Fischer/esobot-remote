@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { Plus, Search, ChevronDown } from "lucide-react";
 import ProviderSheet, { getActiveProvider, getActiveModel } from "../components/chat/ProviderSheet";
@@ -19,11 +19,39 @@ export default function ChatList() {
     setActiveModel(getActiveModel());
   };
 
+  const [refreshing, setRefreshing] = useState(false);
+  const pullStartY = useRef(0);
+  const pullDelta = useRef(0);
+  const listRef = useRef(null);
+
   useEffect(() => {
     setChats(loadChats());
   }, []);
 
+  const handleChatDelete = (id) => {
+    setChats(prev => prev.filter(c => c.id !== id));
+  };
+
+  const handlePullStart = (e) => {
+    if (listRef.current?.scrollTop === 0) {
+      pullStartY.current = e.touches[0].clientY;
+    }
+  };
+
+  const handlePullEnd = (e) => {
+    const delta = e.changedTouches[0].clientY - pullStartY.current;
+    if (delta > 60 && listRef.current?.scrollTop === 0) {
+      setRefreshing(true);
+      if (navigator.vibrate) navigator.vibrate(30);
+      setTimeout(() => {
+        setChats(loadChats());
+        setRefreshing(false);
+      }, 600);
+    }
+  };
+
   const handleNewChat = () => {
+    if (navigator.vibrate) navigator.vibrate(20);
     const chat = createChat("Privat");
     navigate(`/chat/${chat.id}`);
   };
@@ -68,7 +96,17 @@ export default function ChatList() {
       </div>
 
       {/* Chat list */}
-      <div className="flex-1 overflow-y-auto pb-24">
+      <div
+        ref={listRef}
+        onTouchStart={handlePullStart}
+        onTouchEnd={handlePullEnd}
+        className="flex-1 overflow-y-auto pb-24"
+      >
+        {refreshing && (
+          <div className="flex items-center justify-center py-3">
+            <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+          </div>
+        )}
         {filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
             <span className="text-4xl mb-3">💭</span>
@@ -78,7 +116,7 @@ export default function ChatList() {
         ) : (
           <div className="divide-y divide-border/50">
             {filtered.map(chat => (
-              <ChatListItem key={chat.id} chat={chat} />
+            <ChatListItem key={chat.id} chat={chat} onDelete={handleChatDelete} />
             ))}
           </div>
         )}
