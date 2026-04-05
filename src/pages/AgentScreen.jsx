@@ -58,7 +58,7 @@ export default function AgentScreen() {
               <Bot className={`w-7 h-7 ${awake ? "text-success" : "text-destructive"}`} />
             </div>
             <div>
-              <h2 className="font-semibold text-lg">KimiKimi Agent</h2>
+              <h2 className="font-semibold text-lg">ESO Bot Agent</h2>
               <div className="flex items-center gap-2 mt-0.5">
                 <span className={`w-2 h-2 rounded-full ${awake ? "bg-success" : "bg-destructive"}`} />
                 <span className="text-sm text-muted-foreground">{status}</span>

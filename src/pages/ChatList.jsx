@@ -27,7 +27,7 @@ export default function ChatList() {
       {/* Header */}
       <div className="px-4 pt-4 pb-2 safe-top">
         <h1 className="text-2xl font-bold tracking-tight">Chats</h1>
-        <p className="text-sm text-muted-foreground mt-0.5">KimiKimi Agent</p>
+        <p className="text-sm text-muted-foreground mt-0.5">ESO Bot</p>
       </div>
 
       {/* Search */}
