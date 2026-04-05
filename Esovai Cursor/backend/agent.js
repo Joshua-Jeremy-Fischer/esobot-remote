@@ -259,9 +259,15 @@ async function executeTool(name, args) {
   }
 }
 
+// ── Agent Sleep/Wake State ─────────────────────────────────
+const agentState = { awake: false, status: "Schläft...", tasks: [] };
+
 // ── Router ─────────────────────────────────────────────────
 export function createAgentRouter() {
   const router = express.Router();
+
+  // GET /api/agent — Status
+  router.get("/", (_req, res) => res.json(agentState));
 
   // GET /api/agent/search-providers — welche Provider verfügbar sind + aktiver
   router.get("/search-providers", (_req, res) => {
@@ -297,9 +303,23 @@ export function createAgentRouter() {
     res.json(perms);
   });
 
-  // POST /api/agent — Run agentic task with tool-calling loop
+  // POST /api/agent — wake/sleep OR run agentic task
   router.post("/", async (req, res) => {
-    const { messages, system, maxIterations = 8 } = req.body;
+    const { action, messages, system, maxIterations = 8 } = req.body;
+
+    // Sleep/Wake toggle
+    if (action === "wake") {
+      agentState.awake = true;
+      agentState.status = "Aktiv";
+      return res.json(agentState);
+    }
+    if (action === "sleep") {
+      agentState.awake = false;
+      agentState.status = "Schläft...";
+      agentState.tasks = [];
+      return res.json(agentState);
+    }
+
     if (!Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: "messages[] fehlt oder leer" });
     }
