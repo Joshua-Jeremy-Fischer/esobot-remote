@@ -5,7 +5,11 @@ import { BrowserRouter as Router, Route, Routes } from 'react-router-dom';
 import PageNotFound from './lib/PageNotFound';
 import { AuthProvider, useAuth } from '@/lib/AuthContext';
 import UserNotRegisteredError from '@/components/UserNotRegisteredError';
-// Add page imports here
+import MobileLayout from './components/MobileLayout';
+import ChatList from './pages/ChatList';
+import ChatView from './pages/ChatView';
+import AgentScreen from './pages/AgentScreen';
+import SettingsScreen from './pages/SettingsScreen';
 
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError, navigateToLogin } = useAuth();
@@ -33,7 +37,12 @@ const AuthenticatedApp = () => {
   // Render the main app
   return (
     <Routes>
-      {/* Add your page Route elements here */}
+      <Route element={<MobileLayout />}>
+        <Route path="/" element={<ChatList />} />
+        <Route path="/agent" element={<AgentScreen />} />
+        <Route path="/settings" element={<SettingsScreen />} />
+      </Route>
+      <Route path="/chat/:chatId" element={<ChatView />} />
       <Route path="*" element={<PageNotFound />} />
     </Routes>
   );
