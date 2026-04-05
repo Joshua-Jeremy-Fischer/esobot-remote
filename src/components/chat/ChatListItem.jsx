@@ -19,9 +19,11 @@ export default function ChatListItem({ chat }) {
       to={`/chat/${chat.id}`}
       className="flex items-center gap-3 px-4 py-3.5 active:bg-accent transition-colors min-h-[72px]"
     >
-      <div className="w-11 h-11 rounded-full bg-primary/15 flex items-center justify-center flex-shrink-0">
-        <span className="text-lg">💬</span>
-      </div>
+      <img
+        src="https://media.base44.com/images/public/69d2b419042c20a2d77a9f12/efa5802c0_image.png"
+        alt="ESO Bot"
+        className="w-11 h-11 rounded-full object-cover flex-shrink-0"
+      />
       <div className="flex-1 min-w-0">
         <div className="flex items-center justify-between gap-2">
           <h3 className="text-[15px] font-semibold truncate">{chat.title}</h3>
