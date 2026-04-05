@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { ChevronLeft } from "lucide-react";
+import { ChevronLeft, ChevronDown } from "lucide-react";
+import ProviderSheet, { getActiveProvider, getActiveModel } from "../components/chat/ProviderSheet";
 import { getChat, addMessage, updateChat, deleteChat } from "../lib/chatStore";
 import { sendChatMessage } from "../lib/kimiApi";
 import { loadSettings } from "../lib/chatStore";
@@ -15,8 +16,17 @@ export default function ChatView() {
   const [chat, setChat] = useState(null);
   const [isTyping, setIsTyping] = useState(false);
   const [autoScroll, setAutoScroll] = useState(true);
+  const [providerOpen, setProviderOpen] = useState(false);
+  const [activeProvider, setActiveProvider] = useState(getActiveProvider());
+  const [activeModel, setActiveModel] = useState(getActiveModel());
   const scrollRef = useRef(null);
   const bottomRef = useRef(null);
+
+  const handleProviderClose = () => {
+    setProviderOpen(false);
+    setActiveProvider(getActiveProvider());
+    setActiveModel(getActiveModel());
+  };
 
   useEffect(() => {
     const c = getChat(chatId);
@@ -129,9 +139,13 @@ export default function ChatView() {
         </button>
         <div className="flex-1 min-w-0">
           <h2 className="text-[15px] font-semibold truncate">{chat.title}</h2>
-          <p className="text-[11px] text-muted-foreground">
-            {isTyping ? "Schreibt..." : `${chat.messages.length} Nachrichten`}
-          </p>
+          <button
+            onClick={() => setProviderOpen(true)}
+            className="flex items-center gap-0.5 text-[11px] text-muted-foreground active:text-foreground transition-colors"
+          >
+            <span>{isTyping ? "Schreibt..." : `${activeProvider.label}${activeModel?.id ? ` · ${activeModel.label}` : ""}`}</span>
+            <ChevronDown className="w-3 h-3" />
+          </button>
         </div>
         <ChatMenu
           chat={chat}
@@ -165,6 +179,8 @@ export default function ChatView() {
 
       {/* Input */}
       <ChatInput onSend={handleSend} disabled={isTyping} />
+
+      <ProviderSheet open={providerOpen} onClose={handleProviderClose} />
     </div>
   );
 }

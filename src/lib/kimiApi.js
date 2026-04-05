@@ -5,9 +5,13 @@ function getToken() {
 }
 
 function headers() {
+  const provider = localStorage.getItem("kimi_provider") || "base44";
+  const model = localStorage.getItem("kimi_model") || "";
   return {
     "Content-Type": "application/json",
-    "Authorization": `Bearer ${getToken()}`
+    "Authorization": `Bearer ${getToken()}`,
+    "X-Provider": provider,
+    ...(model ? { "X-Model": model } : {})
   };
 }
 
