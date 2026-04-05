@@ -343,9 +343,27 @@ export function createAgentRouter() {
       ...(perms.git        ? TOOLS.git        : []),
     ];
 
+    // Build tool hint to inject into system message
+    const toolNames = [];
+    if (perms.web)        toolNames.push("web_search, web_fetch");
+    if (perms.shell)      toolNames.push("bash");
+    if (perms.fileSystem) toolNames.push("read_file, write_file, list_files");
+    if (perms.git)        toolNames.push("git_command");
+
+    const toolHint = toolNames.length > 0
+      ? `\n\nDu hast Zugriff auf folgende Tools: ${toolNames.join(", ")}. Nutze sie aktiv wenn der Nutzer aktuelle Informationen, Internetrecherche oder Systemzugriff benötigt. Ruf web_search auf für alle Fragen zu aktuellen Ereignissen, Wetter, Nachrichten oder Fakten die sich ändern können.`
+      : "";
+
+    // Inject tool hint into existing system message or prepend one
+    let baseMessages = [...messages];
+    const sysIdx = baseMessages.findIndex(m => m.role === "system");
+    if (sysIdx !== -1) {
+      baseMessages[sysIdx] = { ...baseMessages[sysIdx], content: baseMessages[sysIdx].content + toolHint };
+    }
+
     const msgs = [
-      ...(system ? [{ role: "system", content: system }] : []),
-      ...messages,
+      ...(system ? [{ role: "system", content: system + toolHint }] : sysIdx === -1 && toolHint ? [{ role: "system", content: toolHint.trim() }] : []),
+      ...(system ? messages : baseMessages),
     ];
 
     let iterations = 0;
