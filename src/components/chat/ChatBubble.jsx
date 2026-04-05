@@ -6,9 +6,11 @@ export default function ChatBubble({ message }) {
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"} px-4 py-1`}>
       {!isUser && (
-        <div className="w-7 h-7 rounded-full bg-primary/20 flex items-center justify-center flex-shrink-0 mr-2 mt-auto mb-1">
-          <span className="text-xs">🤖</span>
-        </div>
+        <img
+        src="https://media.base44.com/images/public/69d2b419042c20a2d77a9f12/efa5802c0_image.png"
+        alt="ESO Bot"
+        className="w-7 h-7 rounded-full object-cover flex-shrink-0 mr-2 mt-auto mb-1"
+      />
       )}
       <div
         className={`max-w-[82%] rounded-2xl px-4 py-2.5 ${
