@@ -35,15 +35,22 @@ export default function ChatList() {
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="px-4 pt-4 pb-2 safe-top">
-        <h1 className="text-2xl font-bold tracking-tight">Chats</h1>
-        <button
-          onClick={() => setProviderOpen(true)}
-          className="flex items-center gap-1 text-sm text-muted-foreground mt-0.5 active:text-foreground transition-colors"
-        >
-          <span>{activeProvider.label}{activeModel?.id ? ` · ${activeModel.label}` : ""}</span>
-          <ChevronDown className="w-3.5 h-3.5" />
-        </button>
+      <div className="px-4 pt-4 pb-2 safe-top flex items-center gap-3">
+        <img
+          src="https://media.base44.com/images/public/69d2b419042c20a2d77a9f12/efa5802c0_image.png"
+          alt="ESO Bot"
+          className="w-10 h-10 rounded-full object-cover flex-shrink-0"
+        />
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Chats</h1>
+          <button
+            onClick={() => setProviderOpen(true)}
+            className="flex items-center gap-1 text-sm text-muted-foreground mt-0.5 active:text-foreground transition-colors"
+          >
+            <span>{activeProvider.label}{activeModel?.id ? ` · ${activeModel.label}` : ""}</span>
+            <ChevronDown className="w-3.5 h-3.5" />
+          </button>
+        </div>
       </div>
 
       {/* Search */}
