@@ -137,15 +137,22 @@ export default function ChatView() {
         >
           <ChevronLeft className="w-6 h-6" />
         </button>
-        <div className="flex-1 min-w-0">
-          <h2 className="text-[15px] font-semibold truncate">{chat.title}</h2>
-          <button
-            onClick={() => setProviderOpen(true)}
-            className="flex items-center gap-0.5 text-[11px] text-muted-foreground active:text-foreground transition-colors"
-          >
-            <span>{isTyping ? "Schreibt..." : `${activeProvider.label}${activeModel?.id ? ` · ${activeModel.label}` : ""}`}</span>
-            <ChevronDown className="w-3 h-3" />
-          </button>
+        <div className="flex-1 min-w-0 flex items-center gap-2">
+          <img
+            src="https://media.base44.com/images/public/69d2b419042c20a2d77a9f12/efa5802c0_image.png"
+            alt="ESO Bot"
+            className="w-8 h-8 rounded-full object-cover flex-shrink-0"
+          />
+          <div className="min-w-0">
+            <h2 className="text-[15px] font-semibold truncate">ESO Bot</h2>
+            <button
+              onClick={() => setProviderOpen(true)}
+              className="flex items-center gap-0.5 text-[11px] text-muted-foreground active:text-foreground transition-colors"
+            >
+              <span>{isTyping ? "Schreibt..." : `${activeProvider.label}${activeModel?.id ? ` · ${activeModel.label}` : ""}`}</span>
+              <ChevronDown className="w-3 h-3" />
+            </button>
+          </div>
         </div>
         <ChatMenu
           chat={chat}
@@ -163,8 +170,8 @@ export default function ChatView() {
       >
         {chat.messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-muted-foreground px-8">
-            <span className="text-5xl mb-4">🤖</span>
-            <h3 className="text-lg font-semibold text-foreground">KimiKimi</h3>
+            <img src="https://media.base44.com/images/public/69d2b419042c20a2d77a9f12/efa5802c0_image.png" alt="ESO Bot" className="w-20 h-20 rounded-full object-cover mb-4" />
+            <h3 className="text-lg font-semibold text-foreground">ESO Bot</h3>
             <p className="text-sm text-center mt-2">
               Hey! Wie kann ich dir helfen? Schreib mir eine Nachricht oder nutze die Quick-Actions.
             </p>
