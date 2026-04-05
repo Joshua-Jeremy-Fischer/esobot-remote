@@ -1,13 +1,23 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plus, Search } from "lucide-react";
+import { Plus, Search, ChevronDown } from "lucide-react";
+import ProviderSheet, { getActiveProvider, getActiveModel } from "../components/chat/ProviderSheet";
 import { loadChats, createChat } from "../lib/chatStore";
 import ChatListItem from "../components/chat/ChatListItem";
 
 export default function ChatList() {
   const [chats, setChats] = useState([]);
   const [search, setSearch] = useState("");
+  const [providerOpen, setProviderOpen] = useState(false);
+  const [activeProvider, setActiveProvider] = useState(getActiveProvider());
+  const [activeModel, setActiveModel] = useState(getActiveModel());
   const navigate = useNavigate();
+
+  const handleProviderClose = () => {
+    setProviderOpen(false);
+    setActiveProvider(getActiveProvider());
+    setActiveModel(getActiveModel());
+  };
 
   useEffect(() => {
     setChats(loadChats());
@@ -27,7 +37,13 @@ export default function ChatList() {
       {/* Header */}
       <div className="px-4 pt-4 pb-2 safe-top">
         <h1 className="text-2xl font-bold tracking-tight">Chats</h1>
-        <p className="text-sm text-muted-foreground mt-0.5">ESO Bot</p>
+        <button
+          onClick={() => setProviderOpen(true)}
+          className="flex items-center gap-1 text-sm text-muted-foreground mt-0.5 active:text-foreground transition-colors"
+        >
+          <span>{activeProvider.label}{activeModel?.id ? ` · ${activeModel.label}` : ""}</span>
+          <ChevronDown className="w-3.5 h-3.5" />
+        </button>
       </div>
 
       {/* Search */}
@@ -68,6 +84,8 @@ export default function ChatList() {
       >
         <Plus className="w-6 h-6" />
       </button>
+
+      <ProviderSheet open={providerOpen} onClose={handleProviderClose} />
     </div>
   );
 }
