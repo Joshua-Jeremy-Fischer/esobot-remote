@@ -95,30 +95,35 @@ const PROFILES = [
     id: "it-security",
     label: "IT Security",
     queries: [
-      "site:stepstone.de Junior SOC Analyst München Remote",
-      "site:stellenanzeigen.de Junior IT Security Analyst München Quereinsteiger",
-      "site:indeed.de Junior ISMS Koordinator Remote Deutschland",
-      "site:xing.com Junior IAM Engineer München Erding",
+      // site:/stellenangebote-- zwingt Stepstone zur Einzelstellen-URL
+      "site:stepstone.de/stellenangebote Junior SOC Analyst München Remote",
+      "site:stellenanzeigen.de/job Junior IT Security Analyst Remote Deutschland",
+      // Indeed viewjob = direkte Einzelstellen-URL
+      "site:de.indeed.com/viewjob Junior IT Security Analyst München Remote",
+      "site:de.indeed.com/rc/clk Junior ISMS IAM Analyst Remote Deutschland",
+      "site:linkedin.com/jobs/view Junior SOC Analyst IT Security München Remote",
     ],
   },
   {
     id: "kaufmaennisch",
     label: "Kaufmännisch",
     queries: [
-      "site:stepstone.de Sachbearbeiter Innendienst Erding München",
-      "site:stellenanzeigen.de Kaufmännischer Mitarbeiter Innendienst Mühldorf Rosenheim",
-      "site:indeed.de Disponent ERP Stelle München Großraum",
-      "site:xing.com Sales Coordinator Junior Account Manager München",
+      "site:stepstone.de/stellenangebote Sachbearbeiter Innendienst München Erding",
+      "site:stellenanzeigen.de/job Kaufmännischer Mitarbeiter Innendienst Mühldorf Rosenheim",
+      "site:de.indeed.com/viewjob Sachbearbeiter Großhandel Innendienst München",
+      "site:de.indeed.com/rc/clk Disponent ERP Warenwirtschaft München Remote",
+      "site:linkedin.com/jobs/view Kaufmännisch Innendienst Junior München Erding",
     ],
   },
   {
     id: "it-support-remote",
     label: "IT Support Remote",
     queries: [
-      "site:stepstone.de IT Support Specialist Remote Deutschland Junior",
-      "site:stellenanzeigen.de Junior IT Consultant Remote Deutschland Quereinsteiger",
-      "site:indeed.de SaaS Onboarding Specialist Junior Remote Deutschland",
-      "site:xing.com Helpdesk IT Service Desk Remote Junior Deutschland",
+      "site:stepstone.de/stellenangebote Junior IT Support Helpdesk Remote Deutschland",
+      "site:stellenanzeigen.de/job Junior IT Support Service Desk Remote Homeoffice",
+      "site:de.indeed.com/viewjob Junior IT Support Specialist Remote Deutschland",
+      "site:de.indeed.com/rc/clk Helpdesk Onboarding Remote Junior Deutschland",
+      "site:linkedin.com/jobs/view Junior IT Support Remote Deutschland Quereinsteiger",
     ],
   },
 ];
@@ -151,10 +156,13 @@ function isDetailUrl(url) {
     /stellenanzeigen\.de\/job\//.test(url) ||
     /stepstone\.de\/stellenangebote-detail\//.test(url) ||
     /stepstone\.de\/stellenangebote\/[^/]+-\d+/.test(url) ||
+    /stepstone\.de\/stellenangebote--/.test(url) ||
     /indeed\.com\/viewjob/.test(url) ||
     /de\.indeed\.com\/rc\/clk/.test(url) ||
+    /de\.indeed\.com\/pagead\/clk/.test(url) ||
     /xing\.com\/jobs\/detail\//.test(url) ||
     /linkedin\.com\/jobs\/view\//.test(url) ||
+    /linkedin\.com\/jobs\/collections\//.test(url) ||
     /monster\.de\/jobs\/suche\/detail\//.test(url) ||
     /jobs\.de\/stellenangebote\//.test(url) ||
     /karriere\.at\/jobs\/[^/]+-\d+/.test(url) ||
