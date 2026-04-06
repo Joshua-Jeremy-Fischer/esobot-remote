@@ -34,10 +34,13 @@ function nextProvider() {
 
 // ── Keyword-Filter pro Profil ────────────────────────────────
 // Standort-Whitelist: nur Remote ODER Großraum München
+// Großraum München erreichbar ohne Auto (S-Bahn/Regionalbahn von Dorfen)
+// Linie: Dorfen → Isen → Markt Schwaben → München Ost → München Hbf
+// Mühldorf-Linie: Mühldorf → Ampfing → Haag → Rosenheim
 const LOCATION_OK = ["remote", "homeoffice", "home office", "home-office", "deutschlandweit", "bundesweit",
-  "münchen", "munich", "erding", "dorfen", "mühldorf", "rosenheim", "landshut", "freising",
-  "wasserburg", "haag", "ampfing", "markt schwaben", "ebersberg", "dachau", "fürstenfeldbruck",
-  "starnberg", "wolfratshausen", "holzkirchen", "miesbach", "bad aibling", "rosenheim"];
+  "münchen", "munich", "erding", "dorfen", "mühldorf", "rosenheim",
+  "markt schwaben", "isen", "ebersberg", "haag", "ampfing", "wasserburg",
+  "poing", "zorneding", "grafing"];
 
 // Städte die definitiv zu weit weg sind
 const LOCATION_EXCLUDE = ["berlin", "hamburg", "frankfurt", "köln", "düsseldorf", "stuttgart",
@@ -71,14 +74,16 @@ function scoreResult(result, profileId) {
     if (new RegExp(ex, "i").test(text)) return -1;
   }
 
-  // Standort-Check: Remote ODER Großraum München — sonst disqualifiziert
+  // Standort-Whitelist: MUSS Remote ODER Großraum München/Dorfen enthalten — sonst sofort raus
   const hasOkLocation = LOCATION_OK.some(loc => text.includes(loc));
+  if (!hasOkLocation) return 0; // Würselen, Aachen, irgendwo in DE → raus (score 0 → gefiltert)
+
   const hasBadLocation = LOCATION_EXCLUDE.some(loc => text.includes(loc));
 
-  // Wenn explizit eine schlechte Stadt genannt wird und kein Remote → disqualifiziert
+  // Explizit schlechte Stadt (z.B. Berlin) UND kein Remote → disqualifiziert
   if (hasBadLocation && !text.includes("remote") && !text.includes("homeoffice") && !text.includes("home office")) return -1;
 
-  let score = hasOkLocation ? 2 : 0; // Standort-Bonus
+  let score = 2; // Standort-Bonus (hasOkLocation bereits geprüft)
   for (const inc of filter.include) {
     if (text.includes(inc.toLowerCase())) score++;
   }
