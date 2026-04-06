@@ -148,59 +148,135 @@ async function saveResults() {
   }
 }
 
-// Erkennt ob eine URL auf eine einzelne Stellenanzeige zeigt (nicht eine Übersichtsseite)
+// ── User-Agent Rotation (verhindert 403/429 von Stepstone/Indeed) ──────────
+const USER_AGENTS = [
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_2_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
+  "Mozilla/5.0 (X11; Linux x86_64; rv:124.0) Gecko/20100101 Firefox/124.0",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+];
+
+// ── Erkennt ob eine URL auf eine Einzelstelle zeigt (nicht Übersichtsseite) ──
 function isDetailUrl(url) {
   if (!url) return false;
-  // Typische Detail-URL-Muster auf deutschen Jobbörsen
-  return (
-    /stellenanzeigen\.de\/job\//.test(url) ||
-    /stepstone\.de\/stellenangebote-detail\//.test(url) ||
-    /stepstone\.de\/stellenangebote\/[^/]+-\d+/.test(url) ||
-    /stepstone\.de\/stellenangebote--/.test(url) ||
-    /indeed\.com\/viewjob/.test(url) ||
-    /de\.indeed\.com\/rc\/clk/.test(url) ||
-    /de\.indeed\.com\/pagead\/clk/.test(url) ||
-    /xing\.com\/jobs\/detail\//.test(url) ||
-    /linkedin\.com\/jobs\/view\//.test(url) ||
-    /linkedin\.com\/jobs\/collections\//.test(url) ||
-    /monster\.de\/jobs\/suche\/detail\//.test(url) ||
-    /jobs\.de\/stellenangebote\//.test(url) ||
-    /karriere\.at\/jobs\/[^/]+-\d+/.test(url) ||
-    /jooble\.org\/jooble\/_\d+/.test(url) ||
-    /jobware\.de\/job\//.test(url) ||
-    /glassdoor\.de\/job-listing\//.test(url) ||
-    /remotely\.de\/job\//.test(url) ||
-    /zuhausejobs\.com\/job\//.test(url)
-  );
+  try {
+    const u = new URL(url);
+    const h = u.hostname;
+    const p = u.pathname;
+    // Stepstone: muss Jobnummer-Suffix haben (--NNNNNNN.html oder /NNNNNNN)
+    if (h.includes("stepstone.de"))
+      return /stellenangebote\/.+--\d{6,}/.test(p) || /stellenangebote--/.test(p) || /stellenangebote-detail/.test(p);
+    // Indeed: viewjob mit jk= oder rc/clk Redirect
+    if (h.includes("indeed.com"))
+      return p.includes("/viewjob") || u.searchParams.has("jk") || p.includes("/rc/clk") || p.includes("/pagead/clk");
+    // LinkedIn: /jobs/view/NNNNN
+    if (h.includes("linkedin.com"))
+      return /\/jobs\/view\/\d+/.test(p);
+    // Xing: /jobs/detail/
+    if (h.includes("xing.com"))
+      return p.includes("/jobs/detail/") || /\/jobs\/\d+/.test(p);
+    // Stellenanzeigen.de: /job/
+    if (h.includes("stellenanzeigen.de"))
+      return p.includes("/job/");
+    // Arbeitsagentur
+    if (h.includes("arbeitsagentur.de"))
+      return p.includes("/jobdetail") || p.includes("/angebot/");
+    // Generisch: URL enthält Zahl >= 6 Stellen oder /job/ /stelle/ Pfad
+    return /\/\d{6,}/.test(p) || p.includes("/job/") || p.includes("/stelle/") ||
+      /jobware\.de\/job\//.test(url) || /glassdoor\.de\/job-listing\//.test(url) ||
+      /remotely\.de\/job\//.test(url) || /zuhausejobs\.com\/job\//.test(url) ||
+      /monster\.de\/jobs\/suche\/detail\//.test(url);
+  } catch { return false; }
 }
 
-// Extrahiert Jobtitel, Firma, Ort aus rohem HTML-Text
-function extractFromHtml(text, fallbackTitle, fallbackUrl) {
-  const clean = text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").slice(0, 3000);
-  const titleMatch = clean.match(/(?:Stellentitel|Job-Titel|Position|Jobtitel)[:\s]+([^\n|]{5,80})/i)
-    || clean.match(/<h1[^>]*>([^<]{5,80})<\/h1>/i);
-  const companyMatch = clean.match(/(?:Unternehmen|Arbeitgeber|Firma|Company)[:\s]+([^\n|]{3,60})/i);
-  const locationMatch = clean.match(/(?:Standort|Arbeitsort|Ort|Location)[:\s]+([^\n|]{3,50})/i);
+// ── LD+JSON Schema.org JobPosting Extraktion (Stepstone/Indeed befüllen das aktiv) ──
+function extractLdJson(html) {
+  const matches = [...html.matchAll(/<script[^>]+type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi)];
+  for (const m of matches) {
+    try {
+      const data = JSON.parse(m[1]);
+      // Direkt oder via @graph Array
+      const job = data["@type"] === "JobPosting" ? data
+        : (Array.isArray(data["@graph"]) ? data["@graph"].find(n => n["@type"] === "JobPosting") : null);
+      if (!job) continue;
+      const loc = job.jobLocation;
+      const locStr = Array.isArray(loc)
+        ? loc.map(l => l?.address?.addressLocality || l?.address?.addressRegion || "").filter(Boolean).join(", ")
+        : (loc?.address?.addressLocality || loc?.address?.addressRegion || "");
+      const isRemote = job.jobLocationType === "TELECOMMUTE"
+        || (job.title || "").toLowerCase().includes("remote")
+        || (job.description || "").toLowerCase().includes("remote");
+      return {
+        title: job.title || "",
+        company: job.hiringOrganization?.name || "",
+        location: isRemote ? (locStr ? `${locStr} / Remote` : "Remote") : locStr,
+        snippet: (job.description || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").slice(0, 500),
+        source: "ld+json",
+      };
+    } catch { /* weiter */ }
+  }
+  return null;
+}
+
+// ── Fallback: Meta-Tags + H1 ──────────────────────────────────────────────────
+function extractFromHtml(html, fallbackTitle) {
+  // 1. LD+JSON zuerst — beste Qualität
+  const ldResult = extractLdJson(html);
+  if (ldResult && ldResult.title) return ldResult;
+
+  // 2. Open Graph / Meta-Tags
+  const ogTitle = html.match(/<meta[^>]+property="og:title"[^>]+content="([^"]{5,100})"/i)?.[1]
+    || html.match(/<meta[^>]+content="([^"]{5,100})"[^>]+property="og:title"/i)?.[1];
+  const ogDesc = html.match(/<meta[^>]+property="og:description"[^>]+content="([^"]{10,500})"/i)?.[1]
+    || html.match(/<meta[^>]+content="([^"]{10,500})"[^>]+property="og:description"/i)?.[1];
+  const h1 = html.match(/<h1[^>]*>([^<]{5,120})<\/h1>/i)?.[1]?.trim();
+
+  // 3. Strukturierte Felder aus Text
+  const clean = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+  const companyMatch = clean.match(/(?:Unternehmen|Arbeitgeber|Firma|Company)[:\s]+([^\n|,]{3,60})/i);
+  const locationMatch = clean.match(/(?:Standort|Arbeitsort|Ort|Location|Einsatzort)[:\s]+([^\n|,]{3,60})/i);
+
   return {
-    title: titleMatch?.[1]?.trim() || fallbackTitle,
+    title: ogTitle?.trim() || h1 || fallbackTitle,
     company: companyMatch?.[1]?.trim() || "",
     location: locationMatch?.[1]?.trim() || "",
-    snippet: clean.slice(0, 400),
+    snippet: ogDesc?.trim() || clean.slice(0, 500),
+    source: "meta-fallback",
   };
 }
 
+// ── Fetch mit User-Agent Rotation + Retry/Backoff ────────────────────────────
 async function fetchJobDetail(url, fallbackTitle) {
-  try {
-    const r = await fetch(url, {
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; JobBot/1.0)", "Accept-Language": "de-DE,de;q=0.9" },
-      signal: AbortSignal.timeout(8_000),
-    });
-    if (!r.ok) return null;
-    const html = await r.text();
-    return extractFromHtml(html, fallbackTitle, url);
-  } catch {
-    return null;
+  const ua = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const r = await fetch(url, {
+        headers: {
+          "User-Agent": ua,
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
+          "Accept-Encoding": "gzip, deflate, br",
+          "Cache-Control": "no-cache",
+          "Referer": "https://www.google.de/",
+        },
+        signal: AbortSignal.timeout(9_000),
+      });
+      if (r.status === 429) {
+        // Rate-limited — kurz warten und nochmal
+        await new Promise(res => setTimeout(res, 2500 * (attempt + 1)));
+        continue;
+      }
+      if (!r.ok) return null;
+      const html = await r.text();
+      const result = extractFromHtml(html, fallbackTitle);
+      console.log(`[JOB-CRAWLER] Fetch OK (${result.source}): ${result.title?.slice(0, 60)}`);
+      return result;
+    } catch (e) {
+      if (attempt === 1) console.warn(`[JOB-CRAWLER] Fetch fehlgeschlagen: ${url} — ${e.message}`);
+      await new Promise(res => setTimeout(res, 1500));
+    }
   }
+  return null;
 }
 
 async function runSearch(profile, webSearch, makeLLMClient) {
