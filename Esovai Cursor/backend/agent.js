@@ -24,6 +24,23 @@ export async function addInboxMessage(role, content) {
   await writeInbox(messages);
 }
 
+// ── Postfach (cron job notifications, email-style) ─────────
+const POSTFACH_FILE = "/data/agent-postfach.json";
+
+async function readPostfach() {
+  try { return JSON.parse(await fs.readFile(POSTFACH_FILE, "utf8")); } catch { return []; }
+}
+
+async function writePostfach(entries) {
+  await fs.writeFile(POSTFACH_FILE, JSON.stringify(entries.slice(-100)));
+}
+
+export async function addPostfachEntry(title, content, type = "info") {
+  const entries = await readPostfach();
+  entries.unshift({ id: Date.now() + Math.random(), title, content, type, timestamp: Date.now(), read: false });
+  await writePostfach(entries);
+}
+
 // ── Permissions (persistent in /data/permissions.json) ────
 const PERMS_FILE = "/data/permissions.json";
 const perms = { shell: false, web: false, fileSystem: false, git: false };
@@ -488,6 +505,20 @@ export function createAgentRouter() {
     }
 
     res.json({ messages: await readInbox() });
+  });
+
+  // GET /api/agent/postfach
+  router.get("/postfach", async (_req, res) => {
+    res.json({ entries: await readPostfach() });
+  });
+
+  // POST /api/agent/postfach/:id/read — als gelesen markieren
+  router.post("/postfach/:id/read", async (req, res) => {
+    const entries = await readPostfach();
+    const entry = entries.find(e => String(e.id) === String(req.params.id));
+    if (entry) entry.read = true;
+    await writePostfach(entries);
+    res.json({ ok: true });
   });
 
   // Job-Crawler starten

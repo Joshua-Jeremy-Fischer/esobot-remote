@@ -197,18 +197,18 @@ export async function crawlJobs(webSearch, makeLLMClient) {
   await saveResults();
   console.log(`[JOB-CRAWLER] Durchlauf abgeschlossen: ${jobStore.lastRun}`);
 
-  // Zusammenfassung in Agent-Inbox schreiben
+  // Ergebnisse ins Postfach schreiben
   try {
-    const { addInboxMessage } = await import("./agent.js");
-    const summaries = Object.values(jobStore.profiles)
-      .filter(p => p.content)
-      .map(p => `**${p.name}**\n${p.content.slice(0, 400)}`)
-      .join("\n\n---\n\n");
-    if (summaries) {
-      await addInboxMessage("assistant", `🔍 **Job-Crawler Ergebnisse** (${new Date().toLocaleString("de-DE")})\n\n${summaries}`);
+    const { addPostfachEntry } = await import("./agent.js");
+    const profiles = Object.values(jobStore.profiles).filter(p => p.content);
+    for (const p of profiles) {
+      const lines = (p.content || "").split("\n").filter(l => l.trim() && !l.includes("Keine") );
+      const count = lines.length;
+      const title = `💼 ${p.name}: ${count > 0 ? `${count} Stelle${count !== 1 ? "n" : ""} gefunden` : "Keine Ergebnisse"}`;
+      await addPostfachEntry(title, p.content, "jobs");
     }
   } catch (e) {
-    console.warn("[JOB-CRAWLER] Inbox-Write fehlgeschlagen:", e.message);
+    console.warn("[JOB-CRAWLER] Postfach-Write fehlgeschlagen:", e.message);
   }
 }
 
