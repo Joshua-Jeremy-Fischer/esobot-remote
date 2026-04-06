@@ -68,30 +68,30 @@ const PROFILES = [
     id: "it-security",
     label: "IT Security",
     queries: [
-      "Junior SOC Analyst Stellenangebot München Remote 2025 2026",
-      "Junior IT Security Analyst Stelle Großraum München Quereinsteiger",
-      "ISMS Koordinator Junior Stelle Deutschland Remote",
-      "IAM Engineer Junior Stelle München Erding",
+      "site:stepstone.de Junior SOC Analyst München Remote",
+      "site:stellenanzeigen.de Junior IT Security Analyst München Quereinsteiger",
+      "site:indeed.de Junior ISMS Koordinator Remote Deutschland",
+      "site:xing.com Junior IAM Engineer München Erding",
     ],
   },
   {
     id: "kaufmaennisch",
     label: "Kaufmännisch",
     queries: [
-      "Sachbearbeiter Einkauf Vertrieb Stelle Dorfen Erding München 2025 2026",
-      "Kaufmännischer Mitarbeiter Innendienst Stelle Mühldorf Rosenheim Landshut",
-      "Disponent ERP Stelle München Großraum",
-      "Sales Coordinator Junior Account Manager B2B Stelle München",
+      "site:stepstone.de Sachbearbeiter Innendienst Erding München",
+      "site:stellenanzeigen.de Kaufmännischer Mitarbeiter Innendienst Mühldorf Rosenheim",
+      "site:indeed.de Disponent ERP Stelle München Großraum",
+      "site:xing.com Sales Coordinator Junior Account Manager München",
     ],
   },
   {
     id: "it-support-remote",
     label: "IT Support Remote",
     queries: [
-      "IT Support Specialist Remote Stelle Deutschland 2025 2026",
-      "Junior IT Consultant Remote Stelle Deutschland Quereinsteiger",
-      "SaaS Onboarding Specialist Junior Remote Deutschland",
-      "Helpdesk IT Service Desk Remote Stelle Deutschland Junior",
+      "site:stepstone.de IT Support Specialist Remote Deutschland Junior",
+      "site:stellenanzeigen.de Junior IT Consultant Remote Deutschland Quereinsteiger",
+      "site:indeed.de SaaS Onboarding Specialist Junior Remote Deutschland",
+      "site:xing.com Helpdesk IT Service Desk Remote Junior Deutschland",
     ],
   },
 ];
@@ -113,6 +113,58 @@ async function saveResults() {
     await fs.writeFile(RESULTS_FILE, JSON.stringify(jobStore, null, 2), "utf8");
   } catch (e) {
     console.error("[JOB-CRAWLER] Speichern fehlgeschlagen:", e.message);
+  }
+}
+
+// Erkennt ob eine URL auf eine einzelne Stellenanzeige zeigt (nicht eine Übersichtsseite)
+function isDetailUrl(url) {
+  if (!url) return false;
+  // Typische Detail-URL-Muster auf deutschen Jobbörsen
+  return (
+    /stellenanzeigen\.de\/job\//.test(url) ||
+    /stepstone\.de\/stellenangebote-detail\//.test(url) ||
+    /stepstone\.de\/stellenangebote\/[^/]+-\d+/.test(url) ||
+    /indeed\.com\/viewjob/.test(url) ||
+    /de\.indeed\.com\/rc\/clk/.test(url) ||
+    /xing\.com\/jobs\/detail\//.test(url) ||
+    /linkedin\.com\/jobs\/view\//.test(url) ||
+    /monster\.de\/jobs\/suche\/detail\//.test(url) ||
+    /jobs\.de\/stellenangebote\//.test(url) ||
+    /karriere\.at\/jobs\/[^/]+-\d+/.test(url) ||
+    /jooble\.org\/jooble\/_\d+/.test(url) ||
+    /jobware\.de\/job\//.test(url) ||
+    /glassdoor\.de\/job-listing\//.test(url) ||
+    /remotely\.de\/job\//.test(url) ||
+    /zuhausejobs\.com\/job\//.test(url)
+  );
+}
+
+// Extrahiert Jobtitel, Firma, Ort aus rohem HTML-Text
+function extractFromHtml(text, fallbackTitle, fallbackUrl) {
+  const clean = text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").slice(0, 3000);
+  const titleMatch = clean.match(/(?:Stellentitel|Job-Titel|Position|Jobtitel)[:\s]+([^\n|]{5,80})/i)
+    || clean.match(/<h1[^>]*>([^<]{5,80})<\/h1>/i);
+  const companyMatch = clean.match(/(?:Unternehmen|Arbeitgeber|Firma|Company)[:\s]+([^\n|]{3,60})/i);
+  const locationMatch = clean.match(/(?:Standort|Arbeitsort|Ort|Location)[:\s]+([^\n|]{3,50})/i);
+  return {
+    title: titleMatch?.[1]?.trim() || fallbackTitle,
+    company: companyMatch?.[1]?.trim() || "",
+    location: locationMatch?.[1]?.trim() || "",
+    snippet: clean.slice(0, 400),
+  };
+}
+
+async function fetchJobDetail(url, fallbackTitle) {
+  try {
+    const r = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; JobBot/1.0)", "Accept-Language": "de-DE,de;q=0.9" },
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!r.ok) return null;
+    const html = await r.text();
+    return extractFromHtml(html, fallbackTitle, url);
+  } catch {
+    return null;
   }
 }
 
@@ -149,8 +201,19 @@ async function runSearch(profile, webSearch, makeLLMClient) {
 
   if (scored.length === 0) return "Keine passenden Stellen gefunden.";
 
-  return scored.slice(0, 12).map(r =>
-    `Titel: ${r.title}\nURL: ${r.url}\nBeschreibung: ${(r.snippet || "").slice(0, 200)}`
+  // Top-Treffer: Detail-URLs direkt fetchen für echte Stelleninhalte
+  const top = scored.slice(0, 12);
+  const enriched = await Promise.all(top.map(async (r) => {
+    if (isDetailUrl(r.url)) {
+      console.log(`[JOB-CRAWLER] Fetch Detail: ${r.url}`);
+      const detail = await fetchJobDetail(r.url, r.title);
+      if (detail) return { ...r, title: detail.title || r.title, company: detail.company, location: detail.location, snippet: detail.snippet };
+    }
+    return r;
+  }));
+
+  return enriched.map(r =>
+    `Titel: ${r.title}${r.company ? ` — ${r.company}` : ""}${r.location ? ` (${r.location})` : ""}\nURL: ${r.url}\nBeschreibung: ${(r.snippet || "").slice(0, 250)}`
   ).join("\n---\n");
 }
 
