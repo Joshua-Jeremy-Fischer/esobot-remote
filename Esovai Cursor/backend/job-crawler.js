@@ -208,6 +208,17 @@ function extractLdJson(html) {
       const job = data["@type"] === "JobPosting" ? data
         : (Array.isArray(data["@graph"]) ? data["@graph"].find(n => n["@type"] === "JobPosting") : null);
       if (!job) continue;
+
+      // Alterscheck: Job älter als 90 Tage → überspringen
+      if (job.datePosted) {
+        const posted = new Date(job.datePosted);
+        const ageDays = (Date.now() - posted.getTime()) / (1000 * 60 * 60 * 24);
+        if (ageDays > 90) {
+          console.log(`[JOB-CRAWLER] Überspringe alten Job (${Math.round(ageDays)}d): ${job.title}`);
+          continue;
+        }
+      }
+
       const loc = job.jobLocation;
       const locStr = Array.isArray(loc)
         ? loc.map(l => l?.address?.addressLocality || l?.address?.addressRegion || "").filter(Boolean).join(", ")
@@ -219,6 +230,7 @@ function extractLdJson(html) {
         title: job.title || "",
         company: job.hiringOrganization?.name || "",
         location: isRemote ? (locStr ? `${locStr} / Remote` : "Remote") : locStr,
+        postedDate: job.datePosted || "",
         snippet: (job.description || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").slice(0, 500),
         source: "ld+json",
       };
@@ -345,9 +357,10 @@ async function runSearch(profile, webSearch, makeLLMClient) {
     return "Keine passenden Stellen in der Region (Remote/München-Gebiet).";
   }
 
-  return locationFiltered.map(r =>
-    `Titel: ${r.title}${r.company ? ` — ${r.company}` : ""}${r.location ? ` (${r.location})` : ""}\nURL: ${r.url}\nBeschreibung: ${(r.snippet || "").slice(0, 250)}`
-  ).join("\n---\n");
+  return locationFiltered.map(r => {
+    const datePart = r.postedDate ? ` · ${new Date(r.postedDate).toLocaleDateString("de-DE")}` : "";
+    return `Titel: ${r.title}${r.company ? ` — ${r.company}` : ""}${r.location ? ` (${r.location})` : ""}${datePart}\nURL: ${r.url}\nBeschreibung: ${(r.snippet || "").slice(0, 250)}`;
+  }).join("\n---\n");
 }
 
 export async function crawlJobs(webSearch, makeLLMClient) {

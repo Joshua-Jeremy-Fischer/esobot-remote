@@ -145,6 +145,7 @@ async function webSearch(query, forceProvider) {
     url.searchParams.set("locale", "de_DE");
     url.searchParams.set("engines", "google,duckduckgo");
     url.searchParams.set("categories", "general");
+    url.searchParams.set("time_range", "month"); // Nur Ergebnisse der letzten ~30 Tage
     const r = await fetch(url.toString(), { signal: AbortSignal.timeout(15_000) });
     if (!r.ok) return null;
     const d = await r.json();
