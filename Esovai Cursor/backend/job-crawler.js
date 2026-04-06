@@ -99,40 +99,41 @@ function passesLocationFilter(enriched) {
   return false;
 }
 
+// Datum-Suffix für Google after: — ab 1. April des aktuellen Jahres
+const AFTER_DATE = `after:${new Date().getFullYear()}-04-01`;
+
 const PROFILES = [
   {
     id: "it-security",
     label: "IT Security",
     queries: [
-      // site:/stellenangebote-- zwingt Stepstone zur Einzelstellen-URL
-      "site:stepstone.de/stellenangebote Junior SOC Analyst München Remote",
-      "site:stellenanzeigen.de/job Junior IT Security Analyst Remote Deutschland",
-      // Indeed viewjob = direkte Einzelstellen-URL
-      "site:de.indeed.com/viewjob Junior IT Security Analyst München Remote",
-      "site:de.indeed.com/rc/clk Junior ISMS IAM Analyst Remote Deutschland",
-      "site:linkedin.com/jobs/view Junior SOC Analyst IT Security München Remote",
+      `site:stepstone.de/stellenangebote Junior SOC Analyst München Remote ${AFTER_DATE}`,
+      `site:stellenanzeigen.de/job Junior IT Security Analyst Remote Deutschland ${AFTER_DATE}`,
+      `site:de.indeed.com/viewjob Junior IT Security Analyst München Remote ${AFTER_DATE}`,
+      `site:de.indeed.com/rc/clk Junior ISMS IAM Analyst Remote Deutschland ${AFTER_DATE}`,
+      `site:linkedin.com/jobs/view Junior SOC Analyst IT Security München Remote ${AFTER_DATE}`,
     ],
   },
   {
     id: "kaufmaennisch",
     label: "Kaufmännisch",
     queries: [
-      "site:stepstone.de/stellenangebote Sachbearbeiter Innendienst München Erding",
-      "site:stellenanzeigen.de/job Kaufmännischer Mitarbeiter Innendienst Mühldorf Rosenheim",
-      "site:de.indeed.com/viewjob Sachbearbeiter Großhandel Innendienst München",
-      "site:de.indeed.com/rc/clk Disponent ERP Warenwirtschaft München Remote",
-      "site:linkedin.com/jobs/view Kaufmännisch Innendienst Junior München Erding",
+      `site:stepstone.de/stellenangebote Sachbearbeiter Innendienst München Erding ${AFTER_DATE}`,
+      `site:stellenanzeigen.de/job Kaufmännischer Mitarbeiter Innendienst Mühldorf Rosenheim ${AFTER_DATE}`,
+      `site:de.indeed.com/viewjob Sachbearbeiter Großhandel Innendienst München ${AFTER_DATE}`,
+      `site:de.indeed.com/rc/clk Disponent ERP Warenwirtschaft München Remote ${AFTER_DATE}`,
+      `site:linkedin.com/jobs/view Kaufmännisch Innendienst Junior München Erding ${AFTER_DATE}`,
     ],
   },
   {
     id: "it-support-remote",
     label: "IT Support Remote",
     queries: [
-      "site:stepstone.de/stellenangebote Junior IT Support Helpdesk Remote Deutschland",
-      "site:stellenanzeigen.de/job Junior IT Support Service Desk Remote Homeoffice",
-      "site:de.indeed.com/viewjob Junior IT Support Specialist Remote Deutschland",
-      "site:de.indeed.com/rc/clk Helpdesk Onboarding Remote Junior Deutschland",
-      "site:linkedin.com/jobs/view Junior IT Support Remote Deutschland Quereinsteiger",
+      `site:stepstone.de/stellenangebote Junior IT Support Helpdesk Remote Deutschland ${AFTER_DATE}`,
+      `site:stellenanzeigen.de/job Junior IT Support Service Desk Remote Homeoffice ${AFTER_DATE}`,
+      `site:de.indeed.com/viewjob Junior IT Support Specialist Remote Deutschland ${AFTER_DATE}`,
+      `site:de.indeed.com/rc/clk Helpdesk Onboarding Remote Junior Deutschland ${AFTER_DATE}`,
+      `site:linkedin.com/jobs/view Junior IT Support Remote Deutschland Quereinsteiger ${AFTER_DATE}`,
     ],
   },
 ];
@@ -209,12 +210,12 @@ function extractLdJson(html) {
         : (Array.isArray(data["@graph"]) ? data["@graph"].find(n => n["@type"] === "JobPosting") : null);
       if (!job) continue;
 
-      // Alterscheck: Job älter als 90 Tage → überspringen
+      // Alterscheck: Job vor dem 1. April des aktuellen Jahres → überspringen
       if (job.datePosted) {
         const posted = new Date(job.datePosted);
-        const ageDays = (Date.now() - posted.getTime()) / (1000 * 60 * 60 * 24);
-        if (ageDays > 90) {
-          console.log(`[JOB-CRAWLER] Überspringe alten Job (${Math.round(ageDays)}d): ${job.title}`);
+        const cutoff = new Date(`${new Date().getFullYear()}-04-01`);
+        if (posted < cutoff) {
+          console.log(`[JOB-CRAWLER] Überspringe alten Job (${job.datePosted}): ${job.title}`);
           continue;
         }
       }
