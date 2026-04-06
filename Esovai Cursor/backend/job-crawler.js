@@ -32,22 +32,29 @@ function nextProvider() {
   return provider;
 }
 
-// ── Keyword-Filter pro Profil ────────────────────────────────
-// Standort-Whitelist: nur Remote ODER Großraum München
-// Großraum München erreichbar ohne Auto (S-Bahn/Regionalbahn von Dorfen)
-// Linie: Dorfen → Isen → Markt Schwaben → München Ost → München Hbf
-// Mühldorf-Linie: Mühldorf → Ampfing → Haag → Rosenheim
-const LOCATION_OK = ["remote", "homeoffice", "home office", "home-office", "deutschlandweit", "bundesweit",
-  "deutschland", "germany", "deutschlandweit", "überall",
-  "münchen", "munich", "erding", "dorfen", "mühldorf", "rosenheim",
-  "markt schwaben", "isen", "ebersberg", "haag", "ampfing", "wasserburg",
-  "poing", "zorneding", "grafing"];
+// ── Standort-Logik: NUR Remote ODER München↔Mühldorf Korridor ───────────────
+// Linie: München → Trudering → Riem → Feldkirchen → Vaterstetten → Baldham →
+//   Zorneding → Poing → Markt Schwaben → Ottenhofen → Hörlkofen →
+//   Walpertskirchen → Dorfen → Schwindegg → Ampfing → Mettenheim → Mühldorf
+// Bus-Ast: St. Wolfgang, Ebersberg
+// Alles andere (NRW, BW, Norddeutschland, "deutschlandweit" ohne Remote) → raus
 
-// Städte die definitiv zu weit weg sind
-const LOCATION_EXCLUDE = ["berlin", "hamburg", "frankfurt", "köln", "düsseldorf", "stuttgart",
-  "hannover", "bremen", "leipzig", "dresden", "nürnberg", "dortmund", "essen", "bochum",
-  "wuppertal", "bielefeld", "bonn", "mannheim", "karlsruhe", "freiburg", "augsburg",
-  "wien", "zürich", "schweiz", "österreich", "luxemburg"];
+const REMOTE_KEYWORDS = [
+  "remote", "homeoffice", "home office", "home-office",
+  "vollständig remote", "komplett remote", "100% remote", "100 % remote",
+  "full remote", "fully remote", "arbeitest von zu hause", "arbeiten von zu hause",
+];
+
+const MUNICH_CORRIDOR = [
+  "münchen", "munich", "muenchen",
+  "trudering", "riem", "feldkirchen",
+  "vaterstetten", "baldham", "zorneding",
+  "poing", "markt schwaben", "ottenhofen",
+  "hörlkofen", "hoerlkofen", "walpertskirchen",
+  "dorfen", "schwindegg", "ampfing",
+  "mettenheim", "mühldorf", "muehldorf",
+  "ebersberg", "st. wolfgang", "st wolfgang", "sankt wolfgang",
+];
 
 // Score: +1 pro Include-Treffer, disqualifiziert bei Exclude-Treffer oder falschem Standort
 const PROFILE_FILTERS = {
@@ -81,14 +88,15 @@ function scoreKeywords(result, profileId) {
   return score;
 }
 
-// Schritt 2: Standortfilter nach Detail-Fetch auf angereichertem Text
+// Schritt 2: Standortfilter nach Detail-Fetch — Remote ODER München↔Mühldorf Korridor
 function passesLocationFilter(enriched) {
-  const text = `${enriched.title || ""} ${enriched.company || ""} ${enriched.location || ""} ${enriched.snippet || ""}`.toLowerCase();
-  const hasOkLocation = LOCATION_OK.some(loc => text.includes(loc));
-  if (!hasOkLocation) return false;
-  const hasBadLocation = LOCATION_EXCLUDE.some(loc => text.includes(loc));
-  if (hasBadLocation && !text.includes("remote") && !text.includes("homeoffice") && !text.includes("home office")) return false;
-  return true;
+  const text = `${enriched.title || ""} ${enriched.location || ""} ${enriched.snippet || ""}`.toLowerCase();
+  // Remote hat höchste Priorität
+  if (REMOTE_KEYWORDS.some(k => text.includes(k))) return true;
+  // Korridor-Check
+  if (MUNICH_CORRIDOR.some(place => text.includes(place))) return true;
+  // Alles andere raus — auch "deutschlandweit", "Bayern", "irgendwo in DE"
+  return false;
 }
 
 const PROFILES = [
