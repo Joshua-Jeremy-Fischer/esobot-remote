@@ -482,7 +482,7 @@ export function createAgentRouter() {
     res.json({ messages: await readInbox() });
   });
 
-  // POST /api/agent/inbox — User schreibt, Agent antwortet
+  // POST /api/agent/inbox — User schreibt, Agent antwortet (mit Web-Suche wenn erlaubt)
   router.post("/inbox", async (req, res) => {
     const { content } = req.body;
     if (!content?.trim()) return res.status(400).json({ error: "content fehlt" });
@@ -493,11 +493,32 @@ export function createAgentRouter() {
     try {
       const { client, model } = makeLLMClient();
       const history = await readInbox();
+
+      // Pre-Search Injection (gleicher Mechanismus wie im Haupt-Chat)
+      let searchContext = "";
+      if (perms.web) {
+        try {
+          const sr = await webSearch(content.trim().slice(0, 200));
+          if (sr.results?.length) {
+            searchContext = "\n\n[Aktuelle Web-Suchergebnisse]\n" +
+              sr.results.slice(0, 5)
+                .map((r, i) => `${i + 1}. ${r.title}\n   ${r.snippet || ""}\n   ${r.url}`)
+                .join("\n") +
+              "\n[Ende Suchergebnisse]";
+            console.log(`[Inbox] Web-Suche für: "${content.trim().slice(0, 60)}" → ${sr.results.length} Ergebnisse (${sr.source})`);
+          }
+        } catch (e) {
+          console.warn("[Inbox] Web-Suche fehlgeschlagen:", e.message);
+        }
+      }
+
+      const systemPrompt = "Du bist ESO Bot, ein persönlicher KI-Assistent. Antworte hilfreich, präzise und auf Deutsch." + searchContext;
+
       const msgs = [
-        { role: "system", content: "Du bist ESO Bot, ein persönlicher KI-Assistent. Du schreibst proaktiv in dieser Inbox über Job-Funde, Alerts und Aufgaben. Antworte kurz und hilfreich auf Deutsch." },
+        { role: "system", content: systemPrompt },
         ...history.slice(-20).map(m => ({ role: m.role === "agent" ? "assistant" : m.role, content: m.content }))
       ];
-      const response = await client.chat.completions.create({ model, messages: msgs, max_tokens: 1000 });
+      const response = await client.chat.completions.create({ model, messages: msgs, max_tokens: 2000 });
       const reply = response.choices[0].message.content;
       await addInboxMessage("assistant", reply);
     } catch (e) {
