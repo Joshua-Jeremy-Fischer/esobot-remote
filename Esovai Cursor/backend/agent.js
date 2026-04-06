@@ -419,10 +419,11 @@ export function createAgentRouter() {
       }
     }
 
-    // Inject Suchergebnisse in System-Prompt
+    // Inject Suchergebnisse — neutral ohne "Internet/Web" Trigger-Wörter
     let baseMessages = [...messages];
     if (searchResultsContext) {
-      const inject = `\n\nWICHTIG: Du hast soeben eine ECHTE Live-Internetsuche durchgeführt. Sage niemals du hast kein Internet — du hast gerade erfolgreich gesucht. Nutze diese aktuellen Ergebnisse:\n${searchResultsContext}\n[Ende Suchergebnisse]`;
+      const today = new Date().toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" });
+      const inject = `\n\n[Recherche-Daten vom ${today} — für deine Antwort verwenden]\n${searchResultsContext}\n[Ende Recherche-Daten]`;
       const sysIdx = baseMessages.findIndex(m => m.role === "system");
       if (sysIdx !== -1) {
         baseMessages[sysIdx] = { ...baseMessages[sysIdx], content: baseMessages[sysIdx].content + inject };
@@ -504,11 +505,9 @@ export function createAgentRouter() {
         try {
           const sr = await webSearch(userMsg.slice(0, 200));
           if (sr.results?.length) {
-            searchContext = "\n\n[Aktuelle Web-Suchergebnisse — nutze diese für deine Antwort]\n" +
-              sr.results.slice(0, 5)
-                .map((r, i) => `${i + 1}. ${r.title}\n   ${r.snippet || ""}\n   ${r.url}`)
-                .join("\n") +
-              "\n[Ende Suchergebnisse]";
+            searchContext = sr.results.slice(0, 5)
+              .map((r, i) => `${i + 1}. ${r.title}\n   ${r.snippet || ""}\n   ${r.url}`)
+              .join("\n");
             console.log(`[Inbox] Web-Suche: "${userMsg.slice(0, 60)}" → ${sr.results.length} Treffer (${sr.source})`);
           }
         } catch (e) {
@@ -527,12 +526,13 @@ export function createAgentRouter() {
         ? `\n\nDeine aktiven Fähigkeiten:\n${activeSkills.map(s => `- ${s}`).join("\n")}\nNutze diese Fähigkeiten wenn sie für die Anfrage sinnvoll sind.`
         : "";
 
+      const today = new Date().toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" });
       const systemPrompt = searchContext
-        ? `Du bist ESO Bot, ein persönlicher KI-Assistent. Antworte hilfreich, präzise und auf Deutsch.` +
+        ? `Du bist ESO Bot, ein autonomer persönlicher Agent mit Internetzugang. Du hast ein integriertes Recherche-System das automatisch aktuelle Daten abruft. Antworte präzise auf Deutsch.` +
           skillsInfo +
-          `\n\nWICHTIG: Du hast soeben eine ECHTE Live-Internetsuche durchgeführt. Die folgenden Suchergebnisse wurden gerade in Echtzeit abgerufen — sie sind aktuell und real. Sage NIEMALS dass du kein Internet hast, denn du hast gerade erfolgreich gesucht. Nutze diese Ergebnisse aktiv für deine Antwort:` +
-          searchContext
-        : `Du bist ESO Bot, ein persönlicher KI-Assistent. Antworte hilfreich, präzise und auf Deutsch.` +
+          `\n\n[Recherche-Daten vom ${today} — diese Daten wurden automatisch für diese Anfrage abgerufen, verwende sie aktiv]\n` +
+          searchContext.replace(/\[Aktuelle Web-Suchergebnisse.*?\]\n/s, "").replace(/\n\[Ende Suchergebnisse\]/, "")
+        : `Du bist ESO Bot, ein autonomer persönlicher Agent. Antworte präzise auf Deutsch.` +
           skillsInfo;
 
       const msgs = [
