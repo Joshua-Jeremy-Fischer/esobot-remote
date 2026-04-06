@@ -110,29 +110,9 @@ async function runSearch(profile, webSearch, makeLLMClient) {
     return "Keine Suchergebnisse gefunden.";
   }
 
-  // Kontext begrenzen: max 8 Snippets, je max 200 Zeichen Beschreibung
-  const trimmed = allSnippets.slice(0, 8).map(s => s.slice(0, 300));
-  console.log(`[JOB-CRAWLER] ${profile.label}: ${trimmed.length} Snippets an LLM`);
-
-  const { client, model } = makeLLMClient();
-  try {
-    const response = await client.chat.completions.create({
-      model,
-      messages: [
-        { role: "system", content: profile.systemPrompt },
-        { role: "user", content: `Suchergebnisse:\n\n${trimmed.join("\n---\n")}` },
-      ],
-      max_tokens: 2000,
-    });
-    const choice = response.choices[0];
-    console.log(`[JOB-CRAWLER] LLM finish_reason: ${choice?.finish_reason}, content_length: ${choice?.message?.content?.length ?? 0}`);
-    if (choice?.message?.content?.trim()) return choice.message.content;
-    // Fallback: rohe Snippets zurückgeben wenn LLM leer antwortet
-    return `Suchergebnisse (ungefiltert):\n\n${trimmed.slice(0, 5).join("\n---\n")}`;
-  } catch (e) {
-    console.error("[JOB-CRAWLER] LLM-Fehler:", e.message);
-    return `LLM-Fehler: ${e.message}`;
-  }
+  // Direkt rohe Ergebnisse zurückgeben — kein LLM-Schritt (zu unzuverlässig)
+  console.log(`[JOB-CRAWLER] ${profile.label}: ${allSnippets.length} Ergebnisse gefunden`);
+  return allSnippets.slice(0, 10).join("\n---\n");
 }
 
 export async function crawlJobs(webSearch, makeLLMClient) {

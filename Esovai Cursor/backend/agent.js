@@ -141,8 +141,10 @@ async function webSearch(query, forceProvider) {
     const url = new URL("http://kimi-searxng:8080/search");
     url.searchParams.set("q", query);
     url.searchParams.set("format", "json");
-    url.searchParams.set("language", "de");
-    url.searchParams.set("engines", "google,bing,duckduckgo");
+    url.searchParams.set("language", "de-DE");
+    url.searchParams.set("locale", "de_DE");
+    url.searchParams.set("engines", "google,duckduckgo");
+    url.searchParams.set("categories", "general");
     const r = await fetch(url.toString(), { signal: AbortSignal.timeout(15_000) });
     if (!r.ok) return null;
     const d = await r.json();
@@ -581,6 +583,21 @@ export function createAgentRouter() {
     const entry = entries.find(e => String(e.id) === String(req.params.id));
     if (entry) entry.read = true;
     await writePostfach(entries);
+    res.json({ ok: true });
+  });
+
+  // DELETE /api/agent/postfach/:id — Eintrag löschen
+  router.delete("/postfach/:id", async (req, res) => {
+    const entries = await readPostfach();
+    const filtered = entries.filter(e => String(e.id) !== String(req.params.id));
+    await writePostfach(filtered);
+    res.json({ ok: true });
+  });
+
+  // DELETE /api/agent/postfach — alle gelesenen löschen
+  router.delete("/postfach", async (req, res) => {
+    const entries = await readPostfach();
+    await writePostfach(entries.filter(e => !e.read));
     res.json({ ok: true });
   });
 
