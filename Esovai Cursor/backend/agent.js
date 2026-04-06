@@ -516,9 +516,21 @@ export function createAgentRouter() {
         }
       }
 
+      // Aktive Skills dem Agenten mitteilen
+      const activeSkills = [];
+      if (perms.web)        activeSkills.push("🌐 Web-Suche (aktuelle Informationen aus dem Internet abrufen)");
+      if (perms.fileSystem) activeSkills.push("📁 Dateisystem (Dateien in /data lesen und schreiben)");
+      if (perms.git)        activeSkills.push("🌿 Git (Git-Befehle in /data ausführen)");
+      if (perms.shell)      activeSkills.push("💻 Shell (beliebige Bash-Befehle auf dem Server ausführen)");
+
+      const skillsInfo = activeSkills.length > 0
+        ? `\n\nDeine aktiven Fähigkeiten:\n${activeSkills.map(s => `- ${s}`).join("\n")}\nNutze diese Fähigkeiten wenn sie für die Anfrage sinnvoll sind.`
+        : "";
+
       const systemPrompt =
         `Du bist ESO Bot, ein persönlicher KI-Assistent. Antworte hilfreich, präzise und auf Deutsch.` +
-        (searchContext ? ` Nutze die unten bereitgestellten Web-Suchergebnisse aktiv für deine Antwort und weise darauf hin wenn du aktuelle Infos verwendest.` : "") +
+        skillsInfo +
+        (searchContext ? `\n\nNutze die unten bereitgestellten Web-Suchergebnisse aktiv für deine Antwort und weise darauf hin wenn du aktuelle Infos verwendest.` : "") +
         searchContext;
 
       const msgs = [
