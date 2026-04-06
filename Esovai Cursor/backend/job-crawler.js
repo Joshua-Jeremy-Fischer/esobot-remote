@@ -200,11 +200,11 @@ export async function crawlJobs(webSearch, makeLLMClient) {
   // Ergebnisse ins Postfach schreiben
   try {
     const { addPostfachEntry } = await import("./agent.js");
-    const profiles = Object.values(jobStore.profiles).filter(p => p.content);
+    const profiles = Object.values(jobStore.results).filter(p => p.content);
     for (const p of profiles) {
       const lines = (p.content || "").split("\n").filter(l => l.trim() && !l.includes("Keine") );
       const count = lines.length;
-      const title = `💼 ${p.name}: ${count > 0 ? `${count} Stelle${count !== 1 ? "n" : ""} gefunden` : "Keine Ergebnisse"}`;
+      const title = `💼 ${p.label}: ${count > 0 ? `${count} Stelle${count !== 1 ? "n" : ""} gefunden` : "Keine Ergebnisse"}`;
       await addPostfachEntry(title, p.content, "jobs");
     }
   } catch (e) {
@@ -215,7 +215,7 @@ export async function crawlJobs(webSearch, makeLLMClient) {
 export async function startJobCrawler(webSearch, makeLLMClient) {
   await loadPersistedResults();
   await loadCounter();
-  console.log("[JOB-CRAWLER] Gestartet — läuft stündlich.");
+  console.log("[JOB-CRAWLER] Gestartet — läuft alle 6 Stunden.");
 
   // Sofort einmal laufen lassen
   crawlJobs(webSearch, makeLLMClient);
