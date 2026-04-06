@@ -299,13 +299,24 @@ async function fetchJobDetail(url, fallbackTitle) {
 
       // Stelle bereits offline/abgelaufen → überspringen
       const expired = [
+        // Stepstone
         "diese anzeige ist nicht mehr online",
-        "stellenangebot nicht mehr verfügbar",
+        "anzeige wurde deaktiviert",
+        "es werden keine bewerbungen mehr angenommen",
+        // Indeed
         "diese stelle ist nicht mehr verfügbar",
         "this job has expired",
         "job is no longer available",
-        "anzeige wurde deaktiviert",
-        "es werden keine bewerbungen mehr angenommen",
+        // LinkedIn
+        "die angegebene job-id ist möglicherweise ungültig",
+        "stellenanzeige wurde entfernt",
+        "seite kann nicht geladen werden",
+        // Arbeitsagentur
+        "stellenangebot nicht mehr verfügbar",
+        "angebot ist nicht mehr aktiv",
+        // Generisch
+        "job no longer available",
+        "diese stellenanzeige ist nicht mehr aktiv",
       ];
       const htmlLower = html.slice(0, 5000).toLowerCase();
       if (expired.some(s => htmlLower.includes(s))) {
