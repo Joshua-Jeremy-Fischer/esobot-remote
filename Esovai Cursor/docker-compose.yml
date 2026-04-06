@@ -86,9 +86,9 @@ services:
     container_name: kimi-searxng
     restart: unless-stopped
     environment:
-      - SEARXNG_BASE_URL=http://searxng:8080
+      - SEARXNG_BASE_URL=http://kimi-searxng:8080
     volumes:
-      - searxng_data:/etc/searxng
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
     cap_drop: [ALL]
     security_opt:
       - no-new-privileges:true
@@ -102,4 +102,3 @@ networks:
 volumes:
   ollama_data:
   kimi_data:
-  searxng_data:
