@@ -19,6 +19,9 @@ server:
 search:
   safe_search: 0
   default_lang: "de-DE"
+  formats:
+    - html
+    - json
 
 outgoing:
   request_timeout: 10.0
