@@ -42,20 +42,7 @@ const PROFILES = [
       "ISMS Koordinator Junior Stelle Deutschland Remote",
       "IAM Engineer Junior Stelle München Erding",
     ],
-    systemPrompt: `Du bist ein Job-Crawler-Agent. Analysiere die Suchergebnisse und filtere passende Stellenangebote heraus.
-
-ZIELROLLEN: Junior SOC Analyst, Junior IT-Security Analyst, Junior Koordinator Informationssicherheit, IT-Security Administrator, Junior IAM Engineer, ISMS-Koordinator (Junior)
-
-KANDIDATENPROFIL: IT-Quereinsteiger mit kaufmännischem Hintergrund, Erfahrung: Active Directory, Entra ID, Wazuh SIEM, Shuffle SOAR, Splunk, MITRE ATT&CK, IAM im ERP WW90/AS400, laufende IHK-Zertifizierung Informationssicherheit (Herbst 2026), Homelab, Deutsch nativ, Englisch fließend, KEIN Hochschulstudium.
-
-STANDORT: Dorfen/Erding/München (bis 60 km) ODER vollständig Remote/Home Office deutschlandweit.
-
-AUSSCHLUSSKRITERIEN: Senior (>3 Jahre Pflicht), Pflicht-Studium, kein Security-Bezug, Außendienst >30%.
-
-Gib nur passende Stellen aus im Format (eine pro Zeile):
-Jobtitel | Unternehmen | Standort | Remote-Anteil | Bewerbungslink | Datum
-
-Falls keine passenden Stellen gefunden: schreibe "Keine passenden Stellen gefunden."`,
+    systemPrompt: `Extrahiere Jobangebote aus den Suchergebnissen. Nur Junior IT-Security Stellen (SOC, ISMS, IAM) im Raum München/Remote. Kein Pflicht-Studium. Format pro Zeile: Jobtitel | Unternehmen | Standort | Remote | URL | Datum. Wenn nichts passt: "Keine passenden Stellen gefunden."`,
   },
   {
     id: "kaufmaennisch",
@@ -66,20 +53,7 @@ Falls keine passenden Stellen gefunden: schreibe "Keine passenden Stellen gefund
       "Disponent ERP Stelle München Großraum",
       "Sales Coordinator Junior Account Manager B2B Stelle München",
     ],
-    systemPrompt: `Du bist ein Job-Crawler-Agent. Analysiere die Suchergebnisse und filtere passende Stellenangebote heraus.
-
-ZIELROLLEN: Sachbearbeiter Einkauf/Vertrieb/Auftragsabwicklung, Kaufmännischer Mitarbeiter Innendienst, Disponent, Mitarbeiter Warenwirtschaft/ERP, Sales Coordinator, Junior Account Manager B2B
-
-KANDIDATENPROFIL: Ausgebildeter Kaufmann im Groß- und Außenhandel, Erfahrung ERP-Systeme (WW90/AS400), Stammdatenpflege, strukturierte Arbeitsweise, Deutsch nativ, Englisch fließend.
-
-STANDORT: Dorfen, Erding, Mühldorf, Rosenheim, Landshut, München (bis 50 km) ODER vollständig Remote.
-
-AUSSCHLUSSKRITERIEN: reiner Außendienst/Reisetätigkeit >20%, reiner Lager-/Logistikfokus, Callcenter ohne Sachbearbeitung.
-
-Gib nur passende Stellen aus im Format (eine pro Zeile):
-Jobtitel | Unternehmen | Standort | Remote-Anteil | Bewerbungslink | Datum
-
-Falls keine passenden Stellen gefunden: schreibe "Keine passenden Stellen gefunden."`,
+    systemPrompt: `Extrahiere Jobangebote aus den Suchergebnissen. Nur kaufmännische Stellen (Sachbearbeiter, Innendienst, Disponent, ERP) im Raum München/Remote. Kein reiner Außendienst. Format pro Zeile: Jobtitel | Unternehmen | Standort | Remote | URL | Datum. Wenn nichts passt: "Keine passenden Stellen gefunden."`,
   },
   {
     id: "it-support-remote",
@@ -90,20 +64,7 @@ Falls keine passenden Stellen gefunden: schreibe "Keine passenden Stellen gefund
       "SaaS Onboarding Specialist Junior Remote Deutschland",
       "Helpdesk IT Service Desk Remote Stelle Deutschland Junior",
     ],
-    systemPrompt: `Du bist ein Job-Crawler-Agent. Analysiere die Suchergebnisse und filtere passende Stellenangebote heraus.
-
-ZIELROLLEN: IT Support Specialist (Remote), Technical Support Engineer, Junior IT Sales/SDR, Junior Account Manager IT/SaaS, SaaS Onboarding Specialist, IT Consultant (Junior), Helpdesk/IT Service Desk (Remote), Presales Support (Junior)
-
-KANDIDATENPROFIL: Kaufmännische Ausbildung mit IT-Bezug, Erfahrung: Active Directory, Entra ID, ERP (WW90/AS400), Cybersecurity-Grundlagen, Cloud, kommunikationsstark Deutsch+Englisch, KEIN Hochschulstudium.
-
-STANDORT: AUSSCHLIESSLICH Remote/Home Office deutschlandweit. Gelegentlich Präsenztage (max. 2-3x/Monat) akzeptiert.
-
-AUSSCHLUSSKRITERIEN: reine Hardware/Vor-Ort-IT, Senior (>3 Jahre Pflicht), Pflicht-Studium, Außendienst >20%, Callcenter ohne technischen Anteil.
-
-Gib nur passende Stellen aus im Format (eine pro Zeile):
-Jobtitel | Unternehmen | Standort | Remote-Anteil | Bewerbungslink | Datum
-
-Falls keine passenden Stellen gefunden: schreibe "Keine passenden Stellen gefunden."`,
+    systemPrompt: `Extrahiere Jobangebote aus den Suchergebnissen. Nur Remote IT-Support Stellen (Helpdesk, IT Support, SaaS Onboarding) deutschlandweit. Kein Pflicht-Studium, kein Vor-Ort-Zwang. Format pro Zeile: Jobtitel | Unternehmen | Standort | Remote | URL | Datum. Wenn nichts passt: "Keine passenden Stellen gefunden."`,
   },
 ];
 
@@ -149,17 +110,25 @@ async function runSearch(profile, webSearch, makeLLMClient) {
     return "Keine Suchergebnisse gefunden.";
   }
 
+  // Kontext begrenzen: max 8 Snippets, je max 200 Zeichen Beschreibung
+  const trimmed = allSnippets.slice(0, 8).map(s => s.slice(0, 300));
+  console.log(`[JOB-CRAWLER] ${profile.label}: ${trimmed.length} Snippets an LLM`);
+
   const { client, model } = makeLLMClient();
   try {
     const response = await client.chat.completions.create({
       model,
       messages: [
         { role: "system", content: profile.systemPrompt },
-        { role: "user", content: `Hier sind die Suchergebnisse:\n\n${allSnippets.slice(0, 20).join("\n\n---\n\n")}` },
+        { role: "user", content: `Suchergebnisse:\n\n${trimmed.join("\n---\n")}` },
       ],
       max_tokens: 2000,
     });
-    return response.choices[0]?.message?.content || "Keine Antwort vom Modell.";
+    const choice = response.choices[0];
+    console.log(`[JOB-CRAWLER] LLM finish_reason: ${choice?.finish_reason}, content_length: ${choice?.message?.content?.length ?? 0}`);
+    if (choice?.message?.content?.trim()) return choice.message.content;
+    // Fallback: rohe Snippets zurückgeben wenn LLM leer antwortet
+    return `Suchergebnisse (ungefiltert):\n\n${trimmed.slice(0, 5).join("\n---\n")}`;
   } catch (e) {
     console.error("[JOB-CRAWLER] LLM-Fehler:", e.message);
     return `LLM-Fehler: ${e.message}`;
