@@ -91,6 +91,39 @@
 
 ---
 
+## Use Case 7 — UI-Redesign: Ein Chat, viele Modi
+**Priorität: 🟡 Mittel — verbessert Nutzbarkeit stark**
+
+### Sidebar-Umbau (aktuell: ESO Bot / Chat / Agent / Einstellungen)
+Neu:
+- **Chats** — Hauptarbeitsfläche, ein einziger ESO-Bot-Chat
+- **Workflows** — gespeicherte Abläufe / Pipelines
+- **Runs** — Verlauf von Coding-, QA-, Monitoring-Tasks
+- **Einstellungen** — Modell, API-Keys, Themes, Datenschutz, Prompt-Profile
+
+### Mode-Switcher über dem Input
+Chips/Tabs direkt über dem Eingabefeld:
+`Ask` · `Build` · `QA` · `Research` · `Monitor`
+
+Je nach Modus reagiert der Agent anders:
+- **Build** → Code-Änderungen / Pläne erstellen
+- **QA** → Diff analysieren, Tests prüfen, Freigabe/Blocker
+- **Monitor** → Logs, Alerts, Health zusammenfassen
+- **Research** → Web-Suche, CVEs, Threat Intel
+
+### Run-Panel (rechte Seite / Drawer)
+Wenn Agent einen Task ausführt:
+- Steps sichtbar: Lint → Test → Build → QA Review
+- Ergebnis landet als Zusammenfassung im selben Chat
+
+### Prinzip
+„Ein Hauptchat, interne Spezialisierung" — kein Kontextverlust durch Wechsel zwischen getrennten Bots.
+Agent-Seite nur noch als Konfiguration (Rollen, Tools, Permissions), nicht als zweiter Chat.
+
+**Benötigt:** Frontend-Umbau (Sidebar, Mode-Switcher, Run-Panel)
+
+---
+
 ## Empfehlung: Reihenfolge
 
 | # | Use Case | Warum jetzt |
