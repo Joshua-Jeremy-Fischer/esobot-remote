@@ -28,15 +28,29 @@
 
 ---
 
-## Use Case 3 — Autonomous DevOps/SRE Assistent für KimiKami
+## Use Case 3 — CI/CD + QA Pipeline (GitHub Actions + OpenClaw Review)
 **Priorität: 🟡 Mittel**
 
-- Agent mit GitHub + Shell: kann Logs/CI prüfen, Fehler im Code suchen
-- Fix-Branch anlegen, PR erstellen, einfache Infra-Änderungen vorschlagen
-- Heartbeat-Jobs: regelmäßige Service-Checks
-- Dokumentiert Incidents und Changes (Changelog, Post-Mortem-Drafts) in Repo/Wiki
+### Pipeline-Stufen (Node/Frontend + Backend + Docker)
+1. **Lint & Format** — ESLint/Prettier (Frontend), ShellCheck (Bash)
+2. **Unit Tests** — Vitest/Jest (Frontend), schnelle App-Tests
+3. **Integration Tests** — Docker Compose Services, API + Worker real zusammen
+4. **E2E/UI Tests** — Playwright gegen Frontend oder Staging-Instanz
+5. **Security QA** — Trivy (Container-Scan), Gitleaks (Secrets), Semgrep/SAST, Dependabot
+6. **Docker Build** — Multi-Stage, Image mit Commit-SHA taggen, nur auf main pushen
+7. **OpenClaw Review Step (optional)** — Agent liest Diff, prüft: keine Secrets, klare Fehlerbehandlung, Tests vorhanden, kein ungeprüfter Shell-Exec
 
-**Benötigt:** GitHub Token, Shell-Zugriff (vorhanden), Git-Tool (vorhanden)
+### Trigger
+- PR auf `develop` oder `main` → CI läuft
+- Artefakte + Test-Reports pro PR gespeichert
+
+### Guardrails (wichtig bei AI-Agents)
+- Coding-Agent darf nur in Feature-Branches schreiben
+- Reviewer-Agent gibt Feedback, merged **nicht** selbst
+- Deploy nur nach menschlicher Freigabe oder nur aus `main`
+- Secrets nur über GitHub Secrets/Environments — nie in Prompt, Repo oder Logs
+
+**Benötigt:** GitHub Actions YAML, GitHub Token, Trivy, Playwright CI-Setup
 
 ---
 
