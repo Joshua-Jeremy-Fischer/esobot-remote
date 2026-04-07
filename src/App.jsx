@@ -10,6 +10,7 @@ import ChatList from './pages/ChatList';
 import ChatView from './pages/ChatView';
 import AgentScreen from './pages/AgentScreen';
 import SettingsScreen from './pages/SettingsScreen';
+import PostfachScreen from './pages/PostfachScreen';
 
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError, navigateToLogin } = useAuth();
@@ -40,6 +41,7 @@ const AuthenticatedApp = () => {
       <Route element={<MobileLayout />}>
         <Route path="/" element={<ChatList />} />
         <Route path="/agent" element={<AgentScreen />} />
+        <Route path="/postfach" element={<PostfachScreen />} />
         <Route path="/settings" element={<SettingsScreen />} />
       </Route>
       <Route path="/chat/:chatId" element={<ChatView />} />

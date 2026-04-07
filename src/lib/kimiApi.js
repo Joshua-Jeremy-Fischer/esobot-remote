@@ -43,3 +43,89 @@ export async function getAgentStatus() {
   if (!res.ok) throw new Error(`Agent status error: ${res.status}`);
   return res.json();
 }
+
+// ── Postfach ─────────────────────────────────────────────────
+
+export async function getPostfach() {
+  const res = await fetch(`${BASE_URL}/api/agent/postfach`, {
+    headers: headers()
+  });
+  if (!res.ok) throw new Error(`Postfach error: ${res.status}`);
+  return res.json(); // { entries: [...] }
+}
+
+export async function markPostfachRead(id) {
+  const res = await fetch(`${BASE_URL}/api/agent/postfach/${id}/read`, {
+    method: "POST",
+    headers: headers()
+  });
+  if (!res.ok) throw new Error(`Mark read error: ${res.status}`);
+  return res.json();
+}
+
+export async function deletePostfachEntry(id) {
+  const res = await fetch(`${BASE_URL}/api/agent/postfach/${id}`, {
+    method: "DELETE",
+    headers: headers()
+  });
+  if (!res.ok) throw new Error(`Delete error: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteAllReadPostfach() {
+  const res = await fetch(`${BASE_URL}/api/agent/postfach`, {
+    method: "DELETE",
+    headers: headers()
+  });
+  if (!res.ok) throw new Error(`Delete all read error: ${res.status}`);
+  return res.json();
+}
+
+// ── Agent Inbox (ESO Bot Chat) ────────────────────────────────
+
+export async function getAgentInbox() {
+  const res = await fetch(`${BASE_URL}/api/agent/inbox`, {
+    headers: headers()
+  });
+  if (!res.ok) throw new Error(`Inbox error: ${res.status}`);
+  return res.json(); // { messages: [...] }
+}
+
+export async function sendAgentInboxMessage(message) {
+  const res = await fetch(`${BASE_URL}/api/agent/inbox`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({ message })
+  });
+  if (!res.ok) throw new Error(`Inbox send error: ${res.status}`);
+  return res.json(); // { messages: [...] }
+}
+
+// ── Jobs ──────────────────────────────────────────────────────
+
+export async function getJobs() {
+  const res = await fetch(`${BASE_URL}/api/agent/jobs`, {
+    headers: headers()
+  });
+  if (!res.ok) throw new Error(`Jobs error: ${res.status}`);
+  return res.json(); // { jobs: [...], lastRun, nextRun }
+}
+
+export async function triggerJobCrawl() {
+  const res = await fetch(`${BASE_URL}/api/agent/jobs/run`, {
+    method: "POST",
+    headers: headers()
+  });
+  if (!res.ok) throw new Error(`Job crawl error: ${res.status}`);
+  return res.json();
+}
+
+// ── Monitor ───────────────────────────────────────────────────
+
+export async function getMonitorStatus() {
+  const res = await fetch(`${BASE_URL}/api/monitor/status`, {
+    headers: headers()
+  });
+  if (!res.ok) throw new Error(`Monitor error: ${res.status}`);
+  return res.json(); // { services: [...], disk, memory, allOk }
+}
