@@ -11,6 +11,7 @@ import Database from "better-sqlite3";
 import jwt from "jsonwebtoken";
 import { createAgentRouter } from "./agent.js";
 import { createAuthRouter } from "./auth.js";
+import { getMonitorStatus } from "./monitor.js";
 import { loadSubscriptions, addSubscription, sendPush, startCheckin } from "./push.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -231,6 +232,16 @@ app.use("/api/chat", rateLimit({
 
 // Agent Endpoint (Shell / Web / File / Git — Permissions via toggles)
 app.use("/api/agent", createAgentRouter());
+
+// Monitor Status Endpoint (auth-geschützt)
+app.get("/api/monitor/status", async (_req, res) => {
+  try {
+    const status = await getMonitorStatus();
+    res.json(status);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // Providers-Endpoint — zeigt verfügbare Provider (ohne API-Keys)
 app.get("/api/providers", (_req, res) => {
