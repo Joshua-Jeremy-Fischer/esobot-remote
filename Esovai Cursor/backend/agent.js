@@ -505,9 +505,9 @@ export function createAgentRouter() {
       const { client, model } = makeLLMClient();
       const history = await readInbox();
 
-      // Pre-Search Injection — nur wenn User den Globe-Button aktiviert hat
+      // Pre-Search Injection — Globe-Button reicht, kein Skill-Perm nötig (User entscheidet selbst)
       let searchContext = "";
-      if (webMode && perms.web) {
+      if (webMode) {
         try {
           const sr = await webSearch(userMsg.slice(0, 200));
           if (sr.results?.length) {
