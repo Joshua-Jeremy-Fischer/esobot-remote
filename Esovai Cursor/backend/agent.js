@@ -4,6 +4,9 @@ import { promisify } from "util";
 import fs from "fs/promises";
 import OpenAI from "openai";
 import { startJobCrawler, crawlJobs, getJobResults } from "./job-crawler.js";
+import { chromium } from "playwright-core";
+
+const CHROMIUM_PATH = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || "/usr/bin/chromium-browser";
 
 const execAsync = promisify(exec);
 
@@ -43,13 +46,13 @@ export async function addPostfachEntry(title, content, type = "info") {
 
 // ── Permissions (persistent in /data/permissions.json) ────
 const PERMS_FILE = "/data/permissions.json";
-const perms = { shell: false, web: false, fileSystem: false, git: false };
+const perms = { shell: false, web: false, fileSystem: false, git: false, browser: false };
 
 async function loadPerms() {
   try {
     const raw = await fs.readFile(PERMS_FILE, "utf8");
     const saved = JSON.parse(raw);
-    for (const key of ["shell", "web", "fileSystem", "git"]) {
+    for (const key of ["shell", "web", "fileSystem", "git", "browser"]) {
       if (typeof saved[key] === "boolean") perms[key] = saved[key];
     }
     console.log("[Perms] Geladen:", JSON.stringify(perms));
@@ -268,7 +271,74 @@ const TOOLS = {
       },
     },
   }],
+  browser: [
+    {
+      type: "function",
+      function: {
+        name: "browser_navigate",
+        description: "Open a real headless browser and navigate to a URL. Works with JavaScript-heavy pages like job boards, LinkedIn, Stepstone etc. Returns page title and cleaned text content.",
+        parameters: {
+          type: "object",
+          properties: {
+            url:      { type: "string", description: "URL to open" },
+            extract:  { type: "string", enum: ["text", "links", "structured"], description: "What to extract: text (default), links, or structured (title+text+links)" },
+            waitFor:  { type: "string", description: "Optional CSS selector to wait for before extracting" },
+          },
+          required: ["url"],
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "browser_click",
+        description: "Click an element on the current browser page by CSS selector or text content.",
+        parameters: {
+          type: "object",
+          properties: {
+            url:      { type: "string", description: "URL to navigate to first" },
+            selector: { type: "string", description: "CSS selector or visible text to click" },
+          },
+          required: ["url", "selector"],
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "browser_fill",
+        description: "Fill in a form on a web page (e.g. search box) and optionally submit.",
+        parameters: {
+          type: "object",
+          properties: {
+            url:      { type: "string", description: "URL to navigate to" },
+            selector: { type: "string", description: "CSS selector of input field" },
+            value:    { type: "string", description: "Text to type" },
+            submit:   { type: "boolean", description: "Press Enter/submit after filling" },
+          },
+          required: ["url", "selector", "value"],
+        },
+      },
+    },
+  ],
 };
+
+// ── Browser Helper (Playwright) ────────────────────────────
+async function withAgentBrowser(fn) {
+  let browser;
+  try {
+    browser = await chromium.launch({
+      executablePath: CHROMIUM_PATH,
+      headless: true,
+      args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-setuid-sandbox", "--disable-gpu"],
+    });
+    const page = await browser.newPage();
+    await page.setExtraHTTPHeaders({ "Accept-Language": "de-DE,de;q=0.9,en;q=0.8" });
+    return await fn(page);
+  } finally {
+    await browser?.close();
+  }
+}
 
 // ── Tool executor ──────────────────────────────────────────
 async function executeTool(name, args) {
@@ -318,6 +388,59 @@ async function executeTool(name, args) {
           cwd: "/data",
         });
         return { output: stdout.slice(0, 8000) };
+      }
+      case "browser_navigate": {
+        if (!perms.browser) return { error: "Browser permission not granted" };
+        return withAgentBrowser(async (page) => {
+          await page.goto(args.url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+          if (args.waitFor) await page.waitForSelector(args.waitFor, { timeout: 8_000 }).catch(() => {});
+          const title = await page.title();
+          if (args.extract === "links") {
+            const links = await page.$$eval("a[href]", els =>
+              els.slice(0, 50).map(a => ({ text: a.innerText.trim().slice(0, 80), href: a.href })).filter(l => l.text)
+            );
+            return { title, links };
+          }
+          // Text: clean HTML → plain text
+          const text = await page.evaluate(() => {
+            document.querySelectorAll("script,style,nav,footer,header").forEach(e => e.remove());
+            return document.body?.innerText?.replace(/\s+/g, " ").trim().slice(0, 12_000) || "";
+          });
+          if (args.extract === "structured") {
+            const links = await page.$$eval("a[href]", els =>
+              els.slice(0, 30).map(a => ({ text: a.innerText.trim().slice(0, 80), href: a.href })).filter(l => l.text)
+            );
+            return { title, text, links };
+          }
+          return { title, text };
+        });
+      }
+      case "browser_fill": {
+        if (!perms.browser) return { error: "Browser permission not granted" };
+        return withAgentBrowser(async (page) => {
+          await page.goto(args.url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+          await page.fill(args.selector, args.value);
+          if (args.submit) await page.keyboard.press("Enter");
+          await page.waitForLoadState("domcontentloaded").catch(() => {});
+          const title = await page.title();
+          const text = await page.evaluate(() =>
+            document.body?.innerText?.replace(/\s+/g, " ").trim().slice(0, 8_000) || ""
+          );
+          return { title, text };
+        });
+      }
+      case "browser_click": {
+        if (!perms.browser) return { error: "Browser permission not granted" };
+        return withAgentBrowser(async (page) => {
+          await page.goto(args.url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+          await page.click(args.selector).catch(() => page.getByText(args.selector).first().click());
+          await page.waitForLoadState("domcontentloaded").catch(() => {});
+          const title = await page.title();
+          const text = await page.evaluate(() =>
+            document.body?.innerText?.replace(/\s+/g, " ").trim().slice(0, 8_000) || ""
+          );
+          return { title, text };
+        });
       }
       default:
         return { error: `Unknown tool: ${name}` };
@@ -374,7 +497,7 @@ export function createAgentRouter() {
 
   // POST /api/agent/permissions
   router.post("/permissions", async (req, res) => {
-    for (const key of ["shell", "web", "fileSystem", "git"]) {
+    for (const key of ["shell", "web", "fileSystem", "git", "browser"]) {
       if (typeof req.body[key] === "boolean") perms[key] = req.body[key];
     }
     await savePerms();
@@ -464,6 +587,7 @@ export function createAgentRouter() {
           ...(perms.web        ? TOOLS.web        : []),
           ...(perms.fileSystem ? TOOLS.fileSystem : []),
           ...(perms.git        ? TOOLS.git        : []),
+          ...(perms.browser    ? TOOLS.browser    : []),
         ];
         void tools; // nur für executeTool-Pfad relevant
 
