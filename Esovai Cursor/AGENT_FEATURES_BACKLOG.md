@@ -1,102 +1,99 @@
 # ESO Bot — Feature Backlog
 
-Gesammelte Feature-Ideen vom Agenten selbst vorgeschlagen.
-Noch NICHT implementiert — hier zum späteren Einbauen.
+---
+
+## Use Case 1 — SOC-ähnliches Monitoring (Hetzner Stack)
+**Priorität: 🔥 Hoch — baut direkt auf vorhandener Infra auf**
+
+- Agent checkt regelmäßig Logs/Health der Docker-Services (nginx, kimi-frontend, backend, ollama)
+- Einfache Heuristiken: Container down? Disk voll? Error-Rate hoch?
+- Alerts per Telegram (oder Postfach als Fallback)
+- Bei bekannten Patterns direkt Aktionen: Container neu starten, Disk-Report, Config-Diff
+- Incident-Reports als Markdown → Git-Repo oder Notion
+
+**Benötigt:** Telegram Bot Token, Cron-Job im Agent, Shell-Zugriff (bereits vorhanden)
 
 ---
 
-## 🤖 Autonomes Verhalten
+## Use Case 2 — EsoVAI Security Briefing & Threat Intel
+**Priorität: 🟡 Mittel**
 
-### Autonomes Monitoring
-- Alle X Minuten prüfen ob neue GitHub-Issues, E-Mails oder Server-Logs vorliegen
-- Nur bei relevanten Events benachrichtigen (kein Spam)
-- Konfigurierbar: Intervall, Quellen, Filter
+- Täglicher Agent sammelt CVEs, Security-News, Reddit/Feeds, ggf. Wazuh-/Syslogs
+- Filtert nach Relevanz für deinen Stack (Ubuntu, Docker, NGINX, Ollama, NVIDIA-API)
+- Gibt Digest aus (Postfach oder E-Mail)
+- OpenClaw-Layer: Scraping + Aggregation + erste Bewertung
+- ESO-Layer: Kontextierung, Priorisierung, DSGVO-taugliche Darstellung
 
-### Proaktive Berichte (Morning Briefing)
-- Morgens automatisch Statusbericht an Joshua schicken
-- Inhalt: Server-Health, neue Tickets/Issues, offene Jobs, ggf. Wetter
-- Per E-Mail oder als Postfach-Eintrag
-
-### Skill-Library (Vordefinierte Workflows)
-- Joshua sagt ein Stichwort → Agent führt festen Workflow aus
-- Beispiel: "analysiere Logs" → `tail -f /var/log/syslog | grep -i error`
-- Beispiel: "Server-Status" → CPU/RAM/Disk + laufende Container
-- Skills können in einer Datei `/data/skills.json` gespeichert und erweitert werden
-
-### Workflow-Automatisierung
-- Beispiel: "Räum Downloads auf" → alles älter als 7 Tage → Archiv-Ordner
-- Beispiel: "Check meine Bewerbungen" → offene Bewerbungen aus Postfach zusammenfassen
-- Frei definierbare Makros per Spracheingabe
+**Benötigt:** Feed-Quellen konfigurieren, CVE-API (NVD), Wazuh-API optional
 
 ---
 
-## 🧠 Gedächtnis & Konfiguration
+## Use Case 3 — Autonomous DevOps/SRE Assistent für KimiKami
+**Priorität: 🟡 Mittel**
 
-### Persistentes Gedächtnis / Config-Store
-- Agent speichert Einstellungen dauerhaft in `/data/eso-bot-config.json`
-- Dinge die er sich merken soll: bevorzugte Tools, SSH-Keys (verschlüsselt), API-Tokens, persönliche Vorlieben
-- Nie zweimal dieselbe Info abfragen müssen
+- Agent mit GitHub + Shell: kann Logs/CI prüfen, Fehler im Code suchen
+- Fix-Branch anlegen, PR erstellen, einfache Infra-Änderungen vorschlagen
+- Heartbeat-Jobs: regelmäßige Service-Checks
+- Dokumentiert Incidents und Changes (Changelog, Post-Mortem-Drafts) in Repo/Wiki
 
-### Lernfähigkeit (Skills beibringen)
-- Joshua kann dem Agenten direkt neue Skills/Wissen beibringen per Chat
-- Agent speichert das in seine Config und wendet es künftig an
-- Beispiel: "Merke dir: Wenn ich sage X, mach immer Y"
+**Benötigt:** GitHub Token, Shell-Zugriff (vorhanden), Git-Tool (vorhanden)
 
 ---
 
-## 🔒 Security Tools Integration
+## Use Case 4 — Job/Karriere-Automation (mit Approval-Gate)
+**Priorität: 🔥 Hoch — bereits teilweise implementiert**
 
-### Wazuh Integration
-- Shell-Zugriff auf Wazuh-Server (via SSH oder lokale API)
-- Wazuh REST API abfragen (aktuelle Alerts, Agent-Status)
-- Custom Detection Rules schreiben und deployen
-- `alerts.json` parsen und zusammenfassen
-- Active Response konfigurieren (z.B. IP bei Brute-Force sperren)
-- Wazuh-Agents deployen und verwalten
+- Agent sammelt Stellen, extrahiert Anforderungen, mappt gegen Profil
+- Priorisierte Targets + individuelle Talking Points vorschlagen
+- Bewerbungsunterlagen vorbereiten (Anschreiben-Draft, CV-Anpassungen, LinkedIn-Nachrichten)
+- **Approval-Gate vor jedem Versand** — du bestätigst, Agent sendet
+- OWASP-konform: minimaler Tool-Scope, kein Blind-Versand
 
-### Microsoft Sentinel (Azure SIEM)
-- KQL-Queries ausführen über Azure CLI / REST API
-- Data Connectors konfigurieren (Cloudflare → Sentinel, Wazuh → Sentinel)
-- Analytics Rules erstellen (Scheduled Detection Queries)
-- Incident-Automatisierung: bei Alert → automatisch IP in NSG blocken
-- Service Principal Auth: `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_TENANT_ID`
-
-### HashiCorp Sentinel (Policy as Code)
-- Sentinel-Policies für Terraform schreiben
-- Beispiel: Public S3 Buckets verbieten, Mindest-Tags erzwingen
+**Benötigt:** Schon weitgehend fertig — E-Mail-Approval-Flow fehlt noch im Frontend
 
 ---
 
-## 📲 Benachrichtigungen / Kommunikation
+## Use Case 5 — AI Engineering Team für Projekte
+**Priorität: 🟢 Später — komplex**
 
-### Telegram Bot Integration
-- Agent sendet Benachrichtigungen per Telegram
-- Bidirektional: Joshua kann auch per Telegram Aufgaben schicken
-- Bot-Token als Env-Variable
+- Mehrere spezialisierte Agents: Dev, Infra, Security, Docs
+- Einer schreibt Code, einer Tests/Dockerfiles, einer dokumentiert, einer macht Security-Review
+- OWASP LLMA Top 10 als Security-Checkliste
+- Gesteuert über STATE-Datei / Projekt-YAML (versioniert)
+- Zentrales "Engineering-Log" für alle Agent-Aktionen
 
-### Signal Integration
-- Alternativ zu Telegram: Signal-Benachrichtigungen
-
----
-
-## 🕒 Scheduling / Cron
-
-### Cron-Jobs für den Agenten
-- Agent kann selbst Cron-Jobs anlegen und verwalten
-- Beispiel: "Prüfe jeden Morgen um 8:00 neue Jobs"
-- Jobs persistent speichern (überleben Container-Neustart)
+**Benötigt:** Multi-Agent-Orchestrierung, State-Management — größeres Projekt
 
 ---
 
-## Priorisierung (Vorschlag)
+## Use Case 6 — Personal Knowledge & Lab-Automation
+**Priorität: 🟢 Später**
 
-| Prio | Feature | Aufwand |
-|------|---------|---------|
-| 🔥 Hoch | Skill-Library (vordefinierte Workflows) | Mittel |
-| 🔥 Hoch | Persistentes Gedächtnis / Config-Store | Klein |
-| 🔥 Hoch | Telegram-Benachrichtigungen | Klein |
-| 🟡 Mittel | Autonomes Monitoring | Mittel |
-| 🟡 Mittel | Wazuh REST API Integration | Mittel |
-| 🟡 Mittel | Morning Briefing Cron | Klein |
-| 🟢 Später | Microsoft Sentinel | Groß |
-| 🟢 Später | Lernfähigkeit / Skills beibringen | Groß |
+- Agent indexiert Notes, Runbooks, Wazuh/Shuffle-Playbooks, Lab-Dokus
+- Natürlichsprachlicher Zugriff: "zeige letzte Änderung am Wazuh-Cluster"
+- Brücke Home-Lab ↔ Alltag: Backups checken, Lab-Reminders, To-Dos aus Logs extrahieren
+
+**Benötigt:** Embedding/Vector-Store, Indexer — aufwändig
+
+---
+
+## Empfehlung: Reihenfolge
+
+| # | Use Case | Warum jetzt |
+|---|----------|-------------|
+| 1 | **SOC Monitoring + Telegram** | Sofort nützlich, Infra vorhanden, klein anfangen |
+| 2 | **Job-Automation Approval-Gate** | Schon halb fertig, hoher Alltagswert |
+| 3 | **Security Briefing / Threat Intel** | Täglicher Nutzen, baut auf UC1 auf |
+| 4 | **DevOps SRE Assistent** | GitHub-Integration bereits teilweise da |
+| 5 | **Knowledge Base** | Solide Basis nötig, später |
+| 6 | **AI Engineering Team** | Langfristiges Ziel |
+
+---
+
+## Bereits implementiert
+
+- [x] Job Crawler (Stepstone, Indeed, Bundesagentur) mit Standortfilter
+- [x] Bewerbungs-Workflow (Stelle analysieren → Anschreiben → E-Mail senden)
+- [x] Agent mit Shell, Web, Browser, E-Mail, Filesystem Tools
+- [x] Joshua-Profil + Anschreiben-Stil vollständig im System-Prompt
+- [x] Postfach (Cron-Notifications)
