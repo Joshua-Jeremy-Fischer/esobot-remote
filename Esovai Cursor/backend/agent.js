@@ -5,6 +5,7 @@ import fs from "fs/promises";
 import OpenAI from "openai";
 import { startJobCrawler, crawlJobs, getJobResults } from "./job-crawler.js";
 import { chromium } from "playwright-core";
+import nodemailer from "nodemailer";
 
 const CHROMIUM_PATH = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || "/usr/bin/chromium-browser";
 
@@ -46,13 +47,13 @@ export async function addPostfachEntry(title, content, type = "info") {
 
 // ── Permissions (persistent in /data/permissions.json) ────
 const PERMS_FILE = "/data/permissions.json";
-const perms = { shell: false, web: false, fileSystem: false, git: false, browser: false };
+const perms = { shell: false, web: false, fileSystem: false, git: false, browser: false, email: false };
 
 async function loadPerms() {
   try {
     const raw = await fs.readFile(PERMS_FILE, "utf8");
     const saved = JSON.parse(raw);
-    for (const key of ["shell", "web", "fileSystem", "git", "browser"]) {
+    for (const key of ["shell", "web", "fileSystem", "git", "browser", "email"]) {
       if (typeof saved[key] === "boolean") perms[key] = saved[key];
     }
     console.log("[Perms] Geladen:", JSON.stringify(perms));
@@ -271,6 +272,23 @@ const TOOLS = {
       },
     },
   }],
+  email: [{
+    type: "function",
+    function: {
+      name: "send_email",
+      description: "Send an email on behalf of Joshua. Use for job applications, follow-ups, or any other email.",
+      parameters: {
+        type: "object",
+        properties: {
+          to:      { type: "string", description: "Recipient email address" },
+          subject: { type: "string", description: "Email subject line" },
+          body:    { type: "string", description: "Email body text (plain text or HTML)" },
+          html:    { type: "boolean", description: "Set true if body contains HTML" },
+        },
+        required: ["to", "subject", "body"],
+      },
+    },
+  }],
   browser: [
     {
       type: "function",
@@ -389,6 +407,30 @@ async function executeTool(name, args) {
         });
         return { output: stdout.slice(0, 8000) };
       }
+      case "send_email": {
+        if (!perms.email) return { error: "Email permission not granted" };
+        const smtpConfig = {
+          host: process.env.SMTP_HOST || "smtp.gmail.com",
+          port: parseInt(process.env.SMTP_PORT || "587"),
+          secure: false,
+          auth: {
+            user: process.env.SMTP_USER,
+            pass: process.env.SMTP_PASS,
+          },
+        };
+        if (!smtpConfig.auth.user || !smtpConfig.auth.pass) {
+          return { error: "SMTP nicht konfiguriert. Bitte SMTP_USER und SMTP_PASS als Umgebungsvariablen setzen." };
+        }
+        const transporter = nodemailer.createTransport(smtpConfig);
+        const info = await transporter.sendMail({
+          from: `"Joshua Fischer" <${smtpConfig.auth.user}>`,
+          to: args.to,
+          subject: args.subject,
+          [args.html ? "html" : "text"]: args.body,
+        });
+        console.log(`[EMAIL] Gesendet an ${args.to}: ${info.messageId}`);
+        return { ok: true, messageId: info.messageId, to: args.to };
+      }
       case "browser_navigate": {
         if (!perms.browser) return { error: "Browser permission not granted" };
         return withAgentBrowser(async (page) => {
@@ -497,7 +539,7 @@ export function createAgentRouter() {
 
   // POST /api/agent/permissions
   router.post("/permissions", async (req, res) => {
-    for (const key of ["shell", "web", "fileSystem", "git", "browser"]) {
+    for (const key of ["shell", "web", "fileSystem", "git", "browser", "email"]) {
       if (typeof req.body[key] === "boolean") perms[key] = req.body[key];
     }
     await savePerms();
@@ -588,6 +630,7 @@ export function createAgentRouter() {
           ...(perms.fileSystem ? TOOLS.fileSystem : []),
           ...(perms.git        ? TOOLS.git        : []),
           ...(perms.browser    ? TOOLS.browser    : []),
+          ...(perms.email     ? TOOLS.email      : []),
         ];
         void tools; // nur für executeTool-Pfad relevant
 
@@ -645,25 +688,44 @@ export function createAgentRouter() {
         }
       }
 
-      // Aktive Skills dem Agenten mitteilen
-      const activeSkills = [];
-      if (perms.web)        activeSkills.push("🌐 Web-Suche (aktuelle Informationen aus dem Internet abrufen)");
-      if (perms.fileSystem) activeSkills.push("📁 Dateisystem (Dateien in /data lesen und schreiben)");
-      if (perms.git)        activeSkills.push("🌿 Git (Git-Befehle in /data ausführen)");
-      if (perms.shell)      activeSkills.push("💻 Shell (beliebige Bash-Befehle auf dem Server ausführen)");
-
-      const skillsInfo = activeSkills.length > 0
-        ? `\n\nDeine aktiven Fähigkeiten:\n${activeSkills.map(s => `- ${s}`).join("\n")}\nNutze diese Fähigkeiten wenn sie für die Anfrage sinnvoll sind.`
-        : "";
+      // Aktive Tools dem Agenten mitteilen
+      const activeTools = [];
+      if (perms.web)        activeTools.push("web_search / web_fetch — aktuelle Infos aus dem Internet");
+      if (perms.browser)    activeTools.push("browser_navigate / browser_fill / browser_click — echter Browser, navigiert selbst auf Webseiten");
+      if (perms.fileSystem) activeTools.push("read_file / write_file / list_files — Dateien in /data lesen und schreiben");
+      if (perms.shell)      activeTools.push("bash — Bash-Befehle auf dem Server ausführen");
+      if (perms.git)        activeTools.push("git_command — Git-Operationen");
+      if (perms.email)      activeTools.push("send_email — E-Mails versenden");
 
       const today = new Date().toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" });
-      const systemPrompt = searchContext
-        ? `Du bist ESO Bot, ein autonomer persönlicher Agent mit Internetzugang. Du hast ein integriertes Recherche-System das automatisch aktuelle Daten abruft. Antworte präzise auf Deutsch.` +
-          skillsInfo +
-          `\n\n[Recherche-Daten vom ${today} — diese Daten wurden automatisch für diese Anfrage abgerufen, verwende sie aktiv]\n` +
-          searchContext.replace(/\[Aktuelle Web-Suchergebnisse.*?\]\n/s, "").replace(/\n\[Ende Suchergebnisse\]/, "")
-        : `Du bist ESO Bot, ein autonomer persönlicher Agent. Antworte präzise auf Deutsch.` +
-          skillsInfo;
+
+      const systemPrompt = `Du bist ESO Bot — der persönliche autonome Agent von Joshua Fischer.
+Datum: ${today}
+
+## Über Joshua (dein Nutzer)
+- **Name:** Joshua Fischer, wohnhaft in Dorfen (Landkreis Erding, Bayern)
+- **Kein Auto** — fährt mit S-Bahn/Regionalbahn (München, Erding, Mühldorf, Rosenheim, Poing, Markt Schwaben, Ampfing erreichbar)
+- **Ausbildung:** Kaufmann im Groß- und Außenhandel (abgeschlossen)
+- **IT-Kenntnisse:** Active Directory, Entra ID/Azure AD, Wazuh SIEM, Shuffle SOAR, Splunk, MITRE ATT\&CK, IAM in ERP (WW90/AS400), Homelab-Betrieb, grundlegende Netzwerke & Cybersecurity
+- **Laufend:** IHK-Zertifizierung Informationssicherheit (geplant Herbst 2026)
+- **Sprachen:** Deutsch (Muttersprache), Englisch (fließend)
+- **Zielstellen:** Junior IT Security/SOC Analyst, IT Support Remote, Kaufmännisch Innendienst/Großhandel
+
+## Deine Aufgaben als Agent
+Du arbeitest **autonom und proaktiv**. Du kannst:
+- Jobs suchen, Stellenanzeigen lesen und bewerten
+- **Bewerbungsschreiben** auf eine konkrete Stelle verfassen (Joshua's Profil nutzen)
+- E-Mails schreiben und versenden
+- Im Browser navigieren, Formulare ausfüllen, Seiten lesen
+- Dateien erstellen, bearbeiten, speichern
+- Shell-Befehle ausführen
+- Recherchen durchführen
+
+Wenn Joshua sagt "Bewirb dich für die Stelle" oder "Schreib eine Bewerbung", erstellst du ein vollständiges Anschreiben — direkt einsatzbereit, auf die Stelle zugeschnitten.
+Wenn Joshua sagt "Schreib eine E-Mail", verfasst du den vollständigen Text und fragst ob du absenden sollst.
+Antworte auf Deutsch. Sei direkt und handlungsorientiert.
+${activeTools.length > 0 ? `\n## Aktive Tools\n${activeTools.map(t => `- ${t}`).join("\n")}` : ""}
+${searchContext ? `\n## Aktuelle Recherche-Daten (${today})\n${searchContext.replace(/\[Aktuelle Web-Suchergebnisse.*?\]\n/s, "").replace(/\n\[Ende Suchergebnisse\]/, "")}` : ""}`;
 
       const msgs = [
         { role: "system", content: systemPrompt },
