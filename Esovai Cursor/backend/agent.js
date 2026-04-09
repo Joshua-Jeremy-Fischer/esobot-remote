@@ -5,7 +5,6 @@ import fs from "fs/promises";
 import OpenAI from "openai";
 import { startJobCrawler, crawlJobs, getJobResults } from "./job-crawler.js";
 import { startMonitor, getMonitorStatus } from "./monitor.js";
-import { startScheduler, createTask, listTasks, deleteTask } from "./scheduler.js";
 import { chromium } from "playwright-core";
 import nodemailer from "nodemailer";
 
@@ -168,9 +167,10 @@ async function webSearch(query, forceProvider) {
     const url = new URL("http://kimi-searxng:8080/search");
     url.searchParams.set("q", query);
     url.searchParams.set("format", "json");
-    url.searchParams.set("language", "de-DE");
-    url.searchParams.set("locale", "de_DE");
-    url.searchParams.set("engines", "google,duckduckgo");
+    // SearXNG akzeptiert z. B. "de" — "de-DE"/"de_DE" lösen ValidationException in preferences aus
+    url.searchParams.set("language", "de");
+    // DuckDuckGo triggert serverseitig häufig CAPTCHA → lieber Bing/Google nutzen
+    url.searchParams.set("engines", "bing,google");
     url.searchParams.set("categories", "general");
     url.searchParams.set("time_range", "month"); // Nur Ergebnisse der letzten ~30 Tage
     const r = await fetch(url.toString(), { signal: AbortSignal.timeout(15_000) });
@@ -295,61 +295,6 @@ const TOOLS = {
       },
     },
   }],
-  scheduler: [
-    {
-      type: "function",
-      function: {
-        name: "schedule_task",
-        description: "Plant eine Aufgabe zu einem bestimmten Zeitpunkt. Parst natürliche Zeitangaben wie 'in 30 Minuten', 'um 15:20', 'morgen um 8 Uhr'. Die Aufgabe wird dann automatisch ausgeführt und das Ergebnis ins Postfach geschrieben.",
-        parameters: {
-          type: "object",
-          properties: {
-            instruction: { type: "string", description: "Was soll getan werden? (z.B. 'Recherchiere aktuelle IT-Security News')" },
-            executeAt:   { type: "string", description: "ISO 8601 Zeitpunkt (z.B. '2025-01-15T15:20:00.000Z')" },
-            repeat:      { type: "string", enum: ["daily", "hourly", "weekly"], description: "Wiederholung (optional)" },
-            sendEmail:   { type: "string", description: "E-Mail-Adresse für Ergebnis (optional)" },
-          },
-          required: ["instruction", "executeAt"],
-        },
-      },
-    },
-    {
-      type: "function",
-      function: {
-        name: "list_tasks",
-        description: "Listet alle geplanten Aufgaben auf.",
-        parameters: { type: "object", properties: {} },
-      },
-    },
-    {
-      type: "function",
-      function: {
-        name: "delete_task",
-        description: "Löscht einen geplanten Task anhand seiner ID.",
-        parameters: {
-          type: "object",
-          properties: { id: { type: "string", description: "Task-ID" } },
-          required: ["id"],
-        },
-      },
-    },
-  ],
-  postfach: [{
-    type: "function",
-    function: {
-      name: "write_postfach",
-      description: "Schreibe einen Eintrag ins interne Postfach (Benachrichtigungszentrale). Nutze das für Zusammenfassungen, Recherche-Ergebnisse, Alerts oder alles was Joshua später nachlesen soll.",
-      parameters: {
-        type: "object",
-        properties: {
-          title: { type: "string", description: "Titel des Eintrags (kurz, max 80 Zeichen)" },
-          content: { type: "string", description: "Inhalt des Eintrags (Markdown erlaubt)" },
-          type: { type: "string", enum: ["info", "jobs", "warning", "alert"], description: "Typ des Eintrags" },
-        },
-        required: ["title", "content"],
-      },
-    },
-  }],
   email: [{
     type: "function",
     function: {
@@ -418,6 +363,17 @@ const TOOLS = {
     },
   ],
 };
+
+function getActiveToolDefinitions() {
+  return [
+    ...(perms.shell ? TOOLS.shell : []),
+    ...(perms.web ? TOOLS.web : []),
+    ...(perms.fileSystem ? TOOLS.fileSystem : []),
+    ...(perms.git ? TOOLS.git : []),
+    ...(perms.browser ? TOOLS.browser : []),
+    ...(perms.email ? TOOLS.email : []),
+  ];
+}
 
 // ── Browser Helper (Playwright) ────────────────────────────
 async function withAgentBrowser(fn) {
@@ -489,27 +445,6 @@ async function executeTool(name, args) {
           cwd: "/data",
         });
         return { output: stdout.slice(0, 8000) };
-      }
-      case "write_postfach": {
-        await addPostfachEntry(args.title, args.content, args.type || "info");
-        return { ok: true };
-      }
-      case "schedule_task": {
-        const task = await createTask({
-          instruction: args.instruction,
-          executeAt:   args.executeAt,
-          repeat:      args.repeat || null,
-          sendEmail:   args.sendEmail || null,
-        });
-        return { ok: true, task };
-      }
-      case "list_tasks": {
-        const tasks = await listTasks();
-        return { tasks };
-      }
-      case "delete_task": {
-        await deleteTask(args.id);
-        return { ok: true };
       }
       case "send_email": {
         if (!perms.email) return { error: "Email permission not granted" };
@@ -674,7 +609,6 @@ export function createAgentRouter() {
     const { client, model } = makeLLMClient(req.headers["x-model"] ?? req.body.model);
 
     // ── Pre-Search Injection ───────────────────────────────
-    // Kimi K2.5 via Ollama unterstützt Tool Calling nicht zuverlässig.
     // Wenn preSearch=true: Backend sucht selbst und injiziert Ergebnisse als Kontext.
     let searchResultsContext = "";
     if (preSearch && perms.web) {
@@ -711,14 +645,22 @@ export function createAgentRouter() {
       ? [{ role: "system", content: system }, ...messages]
       : baseMessages;
 
+    const toolDefs = getActiveToolDefinitions();
+
     let iterations = 0;
     try {
       while (iterations < maxIterations) {
-        const response = await client.chat.completions.create({
+        const completionOpts = {
           model,
           messages: msgs,
           max_tokens: 4000,
-        });
+        };
+        if (toolDefs.length) {
+          completionOpts.tools = toolDefs;
+          completionOpts.tool_choice = "auto";
+        }
+
+        const response = await client.chat.completions.create(completionOpts);
 
         const choice = response.choices[0];
         msgs.push(choice.message);
@@ -726,19 +668,6 @@ export function createAgentRouter() {
         if (choice.finish_reason !== "tool_calls" || !choice.message.tool_calls?.length) {
           return res.json({ content: choice.message.content, iterations, model });
         }
-
-        // Tool-Calls falls Modell sie doch unterstützt
-        const tools = [
-          ...(perms.shell      ? TOOLS.shell      : []),
-          ...(perms.web        ? TOOLS.web        : []),
-          ...(perms.fileSystem ? TOOLS.fileSystem : []),
-          ...(perms.git        ? TOOLS.git        : []),
-          ...(perms.browser    ? TOOLS.browser    : []),
-          ...(perms.email     ? TOOLS.email      : []),
-          ...TOOLS.postfach,
-          ...TOOLS.scheduler,
-        ];
-        void tools; // nur für executeTool-Pfad relevant
 
         for (const tc of choice.message.tool_calls) {
           let args = {};
@@ -771,8 +700,12 @@ export function createAgentRouter() {
     const webMode = req.body.webMode === true;
     await addInboxMessage("user", userMsg);
 
-    // Erkennen ob User ins Postfach speichern will
-    const wantsPostfach = /postfach|speicher|merk|notiz|abspeichern|ins postfach/i.test(userMsg);
+    // Inbox ist als "Chatfenster für Postfach" gedacht:
+    // Alles was hier entsteht, landet (zusätzlich) im Postfach, damit nichts verloren geht.
+    // Optional kann der Client das explizit steuern: saveToPostfach=false deaktiviert.
+    const saveToPostfach = req.body.saveToPostfach !== false;
+    const wantsPostfach =
+      saveToPostfach || /postfach|speicher|merk|notiz|abspeichern|ins postfach/i.test(userMsg);
 
     try {
       const { client, model } = makeLLMClient();
@@ -916,23 +849,6 @@ Du arbeitest **autonom und proaktiv**:
 Wenn Joshua sagt "Bewirb dich für die Stelle" oder "Schreib eine Bewerbung", führe den Bewerbungs-Workflow oben aus.
 Wenn Joshua sagt "Schreib eine E-Mail", verfasst du den vollständigen Text und fragst ob du absenden sollst.
 
-## Task-Scheduler (IMMER verfügbar)
-Du kannst Aufgaben zu beliebigen Zeitpunkten einplanen. Nutze schedule_task() wenn Joshua sagt "in X Minuten", "um HH:MM", "morgen um X Uhr", "täglich um X", etc.
-Rechne die Zeit SELBST aus und übergib einen korrekten ISO-String an executeAt.
-Beispiel: "in 30 Minuten" = jetzt + 30min als ISO. "um 15:20" = heute 15:20 Uhr als ISO (falls schon vorbei: morgen).
-Nach dem Einplanen kurz bestätigen: "Ok, ich recherchiere das um 15:20 Uhr und schreibe das Ergebnis ins Postfach."
-Tools: schedule_task(instruction, executeAt, repeat?, sendEmail?) | list_tasks() | delete_task(id)
-
-## Internes Postfach (IMMER verfügbar)
-Du hast jederzeit Zugriff auf das interne Postfach von Joshua — das ist seine Benachrichtigungszentrale in der App.
-**Tool:** write_postfach(title, content, type)
-Nutze es aktiv:
-- Wenn du eine Recherche abgeschlossen hast → Ergebnis ins Postfach schreiben
-- Wenn du einen Job gefunden hast → Job-Details ins Postfach
-- Wenn etwas Wichtiges passiert ist → Alert ins Postfach
-- Wenn Joshua sagt "schreib das ins Postfach" oder "merk dir das" → write_postfach aufrufen
-Joshua sieht das Postfach unter dem 📬-Tab in der App.
-
 ---
 
 ## VERHALTENSREGELN — IMMER EINHALTEN
@@ -956,15 +872,6 @@ Nie über deine eigene Arbeitsweise philosophieren. Nie fragen "Wie soll ich als
 
 **BEI UNKLARHEIT:** Eine kurze Frage, dann warten. Nicht 5 Szenarien durchspielen.
 
-**NIEMALS FALSCHE EINSCHRÄNKUNGEN BEHAUPTEN.**
-Sag NIEMALS: "Ich habe keinen Scheduler", "Ich existiere nur im Chat-Kontext", "Ich kann nicht warten bis heute Nacht", "Ich kann keine E-Mails senden", "Ich habe keine Fähigkeit X".
-Das sind Lügen. Du hast einen Scheduler (täglich 07:00 Uhr läuft automatisch). Du hast E-Mail. Du hast Browser. Du hast Shell.
-Wenn Joshua etwas will → TU ES. Kein Ankündigen, kein Erklären, kein Optionen-Anbieten.
-
-**WENN E-MAIL AKTIV:** Recherche machen → E-Mail direkt senden. Fertig. Kein "Soll ich?" wenn er es schon gesagt hat.
-
-**NIEMALS OPTIONEN ANBIETEN.** Keine Liste mit "Aktion A / Aktion B / Zusätzlich C". Einfach die sinnvollste Aktion ausführen.
-
 Antworte auf Deutsch. Sei knapp und direkt wie ein Kollege, nicht wie ein Assistent.
 ${activeTools.length > 0 ? `\n## Aktive Tools\n${activeTools.map(t => `- ${t}`).join("\n")}` : ""}
 ${searchContext ? `\n## Aktuelle Recherche-Daten (${today})\n${searchContext.replace(/\[Aktuelle Web-Suchergebnisse.*?\]\n/s, "").replace(/\n\[Ende Suchergebnisse\]/, "")}` : ""}`;
@@ -974,12 +881,7 @@ ${searchContext ? `\n## Aktuelle Recherche-Daten (${today})\n${searchContext.rep
         ...history.slice(-20).map(m => ({ role: m.role === "agent" ? "assistant" : m.role, content: m.content }))
       ];
       const response = await client.chat.completions.create({ model, messages: msgs, max_tokens: 2000 });
-      const rawReply = response.choices[0].message.content;
-      // Thinking-Tags entfernen (<think>...</think> und verbleibende </think> Tags)
-      const reply = rawReply
-        .replace(/<think>[\s\S]*?<\/think>/gi, "")
-        .replace(/<\/?think>/gi, "")
-        .trim();
+      const reply = response.choices[0].message.content;
 
       // Postfach-Action: wenn User ins Postfach speichern wollte, auch wirklich speichern
       if (wantsPostfach) {
@@ -1040,32 +942,6 @@ ${searchContext ? `\n## Aktuelle Recherche-Daten (${today})\n${searchContext.rep
 
   // SOC Monitor starten
   startMonitor(addPostfachEntry);
-
-  // Flexibler Task-Scheduler starten
-  startScheduler({
-    webSearch,
-    addPostfach: addPostfachEntry,
-    sendEmail: async (to, subject, body) => {
-      const { client, model } = makeLLMClient();
-      void model;
-      const smtpConfig = {
-        host: process.env.SMTP_HOST || "smtp.gmail.com",
-        port: parseInt(process.env.SMTP_PORT || "587"),
-        secure: false,
-        auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-      };
-      if (!smtpConfig.auth.user || !smtpConfig.auth.pass) throw new Error("SMTP nicht konfiguriert");
-      const nodemailerMod = await import("nodemailer");
-      const transporter = nodemailerMod.default.createTransport(smtpConfig);
-      await transporter.sendMail({ from: `"Joshua Fischer" <${smtpConfig.auth.user}>`, to, subject, text: body });
-    },
-    makeLLMClient: () => {
-      const { client, model } = makeLLMClient();
-      // scheduler reads client._options.model
-      try { client._options = Object.assign(client._options || {}, { model }); } catch {}
-      return client;
-    },
-  });
 
   // Permissions aus Disk laden
   loadPerms();
