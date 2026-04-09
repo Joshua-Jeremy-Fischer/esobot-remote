@@ -861,7 +861,7 @@ POST /api/agent/tasks
 { "instruction": "...", "executeAt": "ISO-8601", "repeat": null }
 \`\`\`
 
-Berechne `executeAt` aus der genannten Uhrzeit + heutigem Datum (${today}).
+Berechne "executeAt" aus der genannten Uhrzeit + heutigem Datum (${today}).
 Beispiel: "um 13:40" → executeAt = "${new Date().toISOString().slice(0,10)}T13:40:00.000Z" (angepasst an lokale Zeitzone: Europe/Berlin = UTC+2 → 11:40 UTC).
 
 Bestätige mit: "Task angelegt — ich recherchiere und schreibe dir um [Zeit] in die Inbox."
