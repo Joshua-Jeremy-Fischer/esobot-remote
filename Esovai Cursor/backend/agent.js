@@ -4,6 +4,7 @@ import { promisify } from "util";
 import fs from "fs/promises";
 import OpenAI from "openai";
 import { startJobCrawler, crawlJobs, getJobResults } from "./job-crawler.js";
+import { startScheduler, createTask, listTasks, deleteTask } from "./scheduler.js";
 import { startMonitor, getMonitorStatus } from "./monitor.js";
 import { chromium } from "playwright-core";
 import nodemailer from "nodemailer";
@@ -851,6 +852,23 @@ Wenn Joshua sagt "Schreib eine E-Mail", verfasst du den vollständigen Text und 
 
 ---
 
+## Zeitgesteuerte Aufgaben (Scheduler)
+
+Wenn Joshua sagt: "mach X um HH:MM" oder "schreib mir um HH:MM" oder "sende mir ... später" oder "erinnere mich um ..." — dann lege sofort einen Task an via POST /api/agent/tasks:
+
+\`\`\`
+POST /api/agent/tasks
+{ "instruction": "...", "executeAt": "ISO-8601", "repeat": null }
+\`\`\`
+
+Berechne `executeAt` aus der genannten Uhrzeit + heutigem Datum (${today}).
+Beispiel: "um 13:40" → executeAt = "${new Date().toISOString().slice(0,10)}T13:40:00.000Z" (angepasst an lokale Zeitzone: Europe/Berlin = UTC+2 → 11:40 UTC).
+
+Bestätige mit: "Task angelegt — ich recherchiere und schreibe dir um [Zeit] in die Inbox."
+Führe die Aufgabe NICHT sofort aus — der Scheduler erledigt das zum richtigen Zeitpunkt.
+
+---
+
 ## VERHALTENSREGELN — IMMER EINHALTEN
 
 **TU ES EINFACH.**
@@ -881,7 +899,47 @@ ${searchContext ? `\n## Aktuelle Recherche-Daten (${today})\n${searchContext.rep
         ...history.slice(-20).map(m => ({ role: m.role === "agent" ? "assistant" : m.role, content: m.content }))
       ];
       const response = await client.chat.completions.create({ model, messages: msgs, max_tokens: 2000 });
-      const reply = response.choices[0].message.content;
+      const rawReply = (response.choices[0].message.content || "")
+        .replace(/<think>[\s\S]*?<\/think>/gi, "")
+        .replace(/<\/?think>/gi, "")
+        .trim();
+
+      // ── Zeitplan-Erkennung: prüfe ob LLM einen Task anlegen will ──
+      // Muster: "TASK: <ISO>|<instruction>" im Reply (vom LLM generiert)
+      // Alternativ: direkte Uhrzeit-Erkennung im User-Input als Fallback
+      let reply = rawReply;
+      const taskDirective = rawReply.match(/SCHEDULE_TASK:\s*(\S+)\s*\|\s*(.+)/i);
+      if (taskDirective) {
+        const [, isoTime, instruction] = taskDirective;
+        try {
+          const task = await createTask({ instruction: instruction.trim(), executeAt: isoTime.trim(), repeat: null, sendEmail: null });
+          reply = rawReply.replace(/SCHEDULE_TASK:[^\n]+/i, "").trim() || `Task angelegt — erledige das um ${new Date(task.executeAt).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })} Uhr.`;
+          console.log(`[Inbox] Scheduler-Task angelegt via LLM: "${task.instruction}" um ${task.executeAt}`);
+        } catch (e) {
+          console.warn("[Inbox] Task-Anlage fehlgeschlagen:", e.message);
+        }
+      } else {
+        // Fallback: Uhrzeit im User-Prompt direkt erkennen (z.B. "um 13:40")
+        const timeMatch = userMsg.match(/um\s+(\d{1,2})[:\.](\d{2})\s*uhr?/i);
+        const hasScheduleIntent = /später|um \d|schreib.*mir.*um|sende.*um|erinner|um \d{1,2}[:.]\d{2}/i.test(userMsg);
+        if (timeMatch && hasScheduleIntent) {
+          const [, hh, mm] = timeMatch;
+          const now = new Date();
+          const exec = new Date(now);
+          exec.setHours(parseInt(hh, 10), parseInt(mm, 10), 0, 0);
+          // Falls Uhrzeit bereits vorbei ist → morgen
+          if (exec <= now) exec.setDate(exec.getDate() + 1);
+          // Zeitzone Europe/Berlin (UTC+2 Sommerzeit / UTC+1 Winter)
+          const offsetMs = 2 * 60 * 60 * 1000; // vereinfacht UTC+2
+          const execUTC = new Date(exec.getTime() - offsetMs);
+          try {
+            const task = await createTask({ instruction: userMsg.trim(), executeAt: execUTC.toISOString(), repeat: null, sendEmail: null });
+            console.log(`[Inbox] Fallback-Scheduler-Task angelegt: "${task.instruction}" um ${task.executeAt}`);
+          } catch (e) {
+            console.warn("[Inbox] Fallback Task-Anlage fehlgeschlagen:", e.message);
+          }
+        }
+      }
 
       // Postfach-Action: wenn User ins Postfach speichern wollte, auch wirklich speichern
       if (wantsPostfach) {
@@ -937,11 +995,49 @@ ${searchContext ? `\n## Aktuelle Recherche-Daten (${today})\n${searchContext.rep
     res.json({ ok: true });
   });
 
+  // ── Scheduler API ─────────────────────────────────────────────
+  // POST /api/agent/tasks — neuen Task anlegen
+  router.post("/tasks", async (req, res) => {
+    const { instruction, executeAt, repeat, sendEmail } = req.body;
+    if (!instruction?.trim()) return res.status(400).json({ error: "instruction fehlt" });
+    if (!executeAt) return res.status(400).json({ error: "executeAt (ISO string) fehlt" });
+    const parsed = new Date(executeAt);
+    if (isNaN(parsed.getTime())) return res.status(400).json({ error: "executeAt ist kein gültiges Datum" });
+    try {
+      const task = await createTask({ instruction: instruction.trim(), executeAt, repeat: repeat || null, sendEmail: sendEmail || null });
+      res.json({ ok: true, task });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // GET /api/agent/tasks — alle ausstehenden Tasks auflisten
+  router.get("/tasks", async (_req, res) => {
+    try {
+      res.json({ tasks: await listTasks() });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // DELETE /api/agent/tasks/:id — Task löschen
+  router.delete("/tasks/:id", async (req, res) => {
+    try {
+      await deleteTask(req.params.id);
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // Job-Crawler starten
   startJobCrawler(webSearch, makeLLMClient);
 
   // SOC Monitor starten
   startMonitor(addPostfachEntry);
+
+  // Scheduler starten
+  startScheduler({ webSearch, addPostfach: addPostfachEntry, sendEmail: null, makeLLMClient });
 
   // Permissions aus Disk laden
   loadPerms();
