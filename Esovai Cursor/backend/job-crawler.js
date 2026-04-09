@@ -173,8 +173,11 @@ async function runSearch(profile, webSearch, makeLLMClient) {
 
   const { client, model } = makeLLMClient();
   try {
+    const systemContent = profile.systemPrompt +
+      "\n\nAntworte ausschließlich als reiner Text im vorgegebenen Format. Keine Tool-Aufrufe, kein JSON, keine Code-Blöcke.";
+
     const buildMessages = (limit) => ([
-      { role: "system", content: profile.systemPrompt },
+      { role: "system", content: systemContent },
       {
         role: "user",
         content:
@@ -196,14 +199,21 @@ async function runSearch(profile, webSearch, makeLLMClient) {
       },
     ]);
 
-    // Ollama gibt gelegentlich HTTP 200, aber leere content zurück.
-    // Daher: konservativer Kontext + 1 Retry mit noch weniger Treffern.
-    for (const limit of [10, 5]) {
+    // Kimi K2.5 liefert manchmal leeres content (tool_calls statt Text).
+    // Strategie: sinkende Snippet-Limits, jeder Versuch ist ein frischer Call — kein
+    // choice.message mit tool_calls in messages mitschleppen (bricht OpenAI-compat APIs).
+    const attempts = [
+      { limit: 10, max_tokens: 800, temperature: 0.2 },
+      { limit: 5,  max_tokens: 600, temperature: 0.1 },
+      { limit: 3,  max_tokens: 400, temperature: 0.1 },
+    ];
+
+    for (const { limit, max_tokens, temperature } of attempts) {
       const response = await client.chat.completions.create({
         model,
         messages: buildMessages(limit),
-        temperature: 0.2,
-        max_tokens: 700,
+        temperature,
+        max_tokens,
       });
       const choice = response.choices?.[0];
       const content = (choice?.message?.content || "").trim();
@@ -211,7 +221,7 @@ async function runSearch(profile, webSearch, makeLLMClient) {
 
       const finish = choice?.finish_reason || "unknown";
       const hasToolCalls = !!choice?.message?.tool_calls?.length;
-      console.warn(`[JOB-CRAWLER] Leere LLM-Antwort (${profile.id}) finish_reason=${finish} tool_calls=${hasToolCalls} (retry=${limit === 10})`);
+      console.warn(`[JOB-CRAWLER] Leere Antwort (${profile.id}) finish=${finish} tool_calls=${hasToolCalls} limit=${limit} — nächster Versuch`);
     }
 
     return "LLM lieferte eine leere Antwort (200 OK, aber kein content).";
