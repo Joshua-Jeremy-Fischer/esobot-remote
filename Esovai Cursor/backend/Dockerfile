@@ -3,11 +3,13 @@ FROM node:20-alpine
 # Build-Tools + Chromium für Playwright (headless Browser-Suche)
 RUN apk add --no-cache \
     python3 make g++ \
-    chromium nss freetype harfbuzz ca-certificates ttf-freefont udev
+    chromium nss freetype harfbuzz ca-certificates ttf-freefont udev \
+    tzdata
 
 # Playwright soll NICHT seinen eigenen Browser runterladen — wir nutzen System-Chromium
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium-browser
+ENV TZ=Europe/Berlin
 
 WORKDIR /app
 
@@ -17,7 +19,7 @@ COPY package*.json ./
 # npm ci bevorzugt (benötigt package-lock.json); fallback: npm install --omit=dev
 RUN if [ -f package-lock.json ]; then npm ci --omit=dev; else npm install --omit=dev; fi
 
-COPY server.js agent.js auth.js push.js job-crawler.js monitor.js scheduler.js ./
+COPY server.js agent.js auth.js push.js job-crawler.js monitor.js scheduler.js cron-parse.js ./
 COPY scripts/ ./scripts/
 
 # FIM-Hashes beim Build (kein mehrzeiliges RUN node -e — das bricht den Dockerfile-Parser)
