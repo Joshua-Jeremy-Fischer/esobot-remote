@@ -156,7 +156,10 @@ async function runSearch(profile, webSearch, makeLLMClient) {
       if (result.results?.length) {
         for (const r of result.results) {
           if (!locationPasses(profile.id, r.title || "", r.snippet || "", r.url || "")) continue;
-          allSnippets.push(`Titel: ${r.title}\nURL: ${r.url}\nBeschreibung: ${r.snippet || ""}`);
+          const title = String(r.title || "").slice(0, 200);
+          const url = String(r.url || "").slice(0, 500);
+          const snippet = String(r.snippet || "").replace(/\s+/g, " ").slice(0, 800);
+          allSnippets.push(`Titel: ${title}\nURL: ${url}\nBeschreibung: ${snippet}`);
         }
       }
     } catch (e) {
@@ -170,15 +173,34 @@ async function runSearch(profile, webSearch, makeLLMClient) {
 
   const { client, model } = makeLLMClient();
   try {
-    const response = await client.chat.completions.create({
-      model,
-      messages: [
-        { role: "system", content: profile.systemPrompt },
-        { role: "user", content: `Hier sind die Suchergebnisse:\n\n${allSnippets.slice(0, 20).join("\n\n---\n\n")}` },
-      ],
-      max_tokens: 2000,
-    });
-    return response.choices[0]?.message?.content || "Keine Antwort vom Modell.";
+    const buildMessages = (limit) => ([
+      { role: "system", content: profile.systemPrompt },
+      {
+        role: "user",
+        content:
+          `Hier sind die Suchergebnisse (gekürzt, max ${limit} Treffer):\n\n` +
+          allSnippets.slice(0, limit).join("\n\n---\n\n"),
+      },
+    ]);
+
+    // Ollama gibt gelegentlich HTTP 200, aber leere content zurück.
+    // Daher: konservativer Kontext + 1 Retry mit noch weniger Treffern.
+    for (const limit of [10, 5]) {
+      const response = await client.chat.completions.create({
+        model,
+        messages: buildMessages(limit),
+        max_tokens: 1200,
+      });
+      const choice = response.choices?.[0];
+      const content = (choice?.message?.content || "").trim();
+      if (content) return content;
+
+      const finish = choice?.finish_reason || "unknown";
+      const hasToolCalls = !!choice?.message?.tool_calls?.length;
+      console.warn(`[JOB-CRAWLER] Leere LLM-Antwort (${profile.id}) finish_reason=${finish} tool_calls=${hasToolCalls} (retry=${limit === 10})`);
+    }
+
+    return "LLM lieferte eine leere Antwort (200 OK, aber kein content).";
   } catch (e) {
     console.error("[JOB-CRAWLER] LLM-Fehler:", e.message);
     return `LLM-Fehler: ${e.message}`;
