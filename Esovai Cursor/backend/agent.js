@@ -781,39 +781,43 @@ export function createAgentRouter() {
   /**
    * Erkennt Zeitangaben im User-Text und gibt ein CronSchedule-Objekt zurück.
    * Unterstützt:
-   *   - Relative Zeiten: "in 3 Minuten", "in 1h30m", "jetzt+5min", "in 45s"
+   *   - Relative Zeiten: "in 3 Minuten", "in 1h30m", "jetzt+5min", "in 45s",
+   *                      "in von jetzt 5 min", "in etwa 10 Minuten"
    *   - Absolute Zeiten: "um 13:40", "um 09:00 Uhr"
    * Gibt null zurück wenn keine Zeitangabe erkannt wurde.
    */
   function buildSchedule(userMsg) {
     const now = Date.now();
 
-    // ── 1. Relative Zeit via parseDurationMs ──────────────────
-    // Patterns: "in 3 Minuten", "in 1h30m", "jetzt+5min", "[jetzt+3min]"
-    const relPatterns = [
-      // "in <duration>" — z.B. "in 3 Minuten", "in 1h30m", "in 45s"
-      /\bin\s+([\w.]+(?:\s*[\w.]+)?)\b/i,
-      // "[jetzt+<duration>]" oder "jetzt+<duration>"
-      /\[?\s*jetzt\s*\+\s*([\w.]+)\s*\]?/i,
-    ];
+    // ── 1. Relative Zeit ──────────────────────────────────────
+    // Strategie: Suche Zahl+Einheit direkt im String (robust gegen "in von jetzt 5 min" etc.)
+    // Reihenfolge: erst zusammengesetzte Patterns (1h30m), dann einfache (5 min)
 
-    for (const pattern of relPatterns) {
-      const m = userMsg.match(pattern);
-      if (!m) continue;
-
-      // Extrahiere den Duration-Token und normalisiere "Minuten" → "m", etc.
-      const raw = m[1].trim()
-        .replace(/minuten?/i, "m")
-        .replace(/stunden?/i, "h")
-        .replace(/sekunden?/i, "s")
-        .replace(/tagen?/i,    "d")
+    // a) "jetzt+<duration>" oder "[jetzt+<duration>]"
+    const jetzt = userMsg.match(/\[?\s*jetzt\s*\+\s*([\w.]+)\s*\]?/i);
+    if (jetzt) {
+      const raw = jetzt[1].trim()
+        .replace(/minuten?/i, "m").replace(/stunden?/i, "h")
+        .replace(/sekunden?/i, "s").replace(/tagen?/i, "d")
         .replace(/\s+/g, "");
-
       const ms = parseDurationMs(raw);
       if (ms != null && ms > 0) {
-        const atMs     = now + Math.max(ms, 30_000); // mindestens 30s in der Zukunft
-        const atIso    = new Date(atMs).toISOString();
-        return { kind: "at", at: atIso };
+        return { kind: "at", at: new Date(now + Math.max(ms, 30_000)).toISOString() };
+      }
+    }
+
+    // b) Zahl + Einheit irgendwo im String (egal welche Wörter drumherum)
+    //    Trifft: "in 3 Minuten", "in von jetzt 5 min", "in etwa 1h30m", "warte 45s"
+    const numUnit = userMsg.match(/(\d+(?:[.,]\d+)?)\s*(minuten?|stunden?|sekunden?|tagen?|min|h(?:r)?|s|d|ms)\b/i);
+    if (numUnit) {
+      const value = parseFloat(numUnit[1].replace(",", "."));
+      const unitRaw = numUnit[2].toLowerCase()
+        .replace(/minuten?/, "m").replace(/stunden?/, "h")
+        .replace(/sekunden?/, "s").replace(/tagen?/, "d")
+        .replace(/hr/, "h");
+      const ms = parseDurationMs(`${value}${unitRaw}`);
+      if (ms != null && ms > 0) {
+        return { kind: "at", at: new Date(now + Math.max(ms, 30_000)).toISOString() };
       }
     }
 
@@ -827,6 +831,9 @@ export function createAgentRouter() {
       if (exec.getTime() <= now) exec.setDate(exec.getDate() + 1); // morgen falls vorbei
       return { kind: "at", at: exec.toISOString() };
     }
+
+    return null;
+  }
 
     return null;
   }
