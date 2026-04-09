@@ -938,7 +938,8 @@ ${searchContext ? `\n## Aktuelle Recherche-Daten (${today})\n${searchContext.rep
           const mins = Math.max(1, Math.min(24 * 60, parseInt(relMatch[1], 10) || 0));
           const execUTC = new Date(Date.now() + mins * 60_000);
           try {
-            const task = await createTask({ instruction: extractInstruction(userMsg), executeAt: execUTC.toISOString(), repeat: null, sendEmail: null });
+            const cleanInstruction = extractInstruction(userMsg) || userMsg;
+            const task = await createTask({ instruction: cleanInstruction, executeAt: execUTC.toISOString(), repeat: null, sendEmail: null });
             reply = `Task angelegt — ich schreibe dir um ${new Date(task.executeAt).toLocaleTimeString("de-DE", {
               hour: "2-digit",
               minute: "2-digit",
@@ -959,11 +960,10 @@ ${searchContext ? `\n## Aktuelle Recherche-Daten (${today})\n${searchContext.rep
           exec.setHours(parseInt(hh, 10), parseInt(mm, 10), 0, 0);
           // Falls Uhrzeit bereits vorbei ist → morgen
           if (exec <= now) exec.setDate(exec.getDate() + 1);
-          // Zeitzone Europe/Berlin (UTC+2 Sommerzeit / UTC+1 Winter)
-          const offsetMs = 2 * 60 * 60 * 1000; // vereinfacht UTC+2
-          const execUTC = new Date(exec.getTime() - offsetMs);
           try {
-            const task = await createTask({ instruction: extractInstruction(userMsg), executeAt: execUTC.toISOString(), repeat: null, sendEmail: null });
+            // Container läuft in Europe/Berlin (TZ + tzdata) → exec.toISOString() ist korrekt (inkl. DST)
+            const cleanInstruction = extractInstruction(userMsg) || userMsg;
+            const task = await createTask({ instruction: cleanInstruction, executeAt: exec.toISOString(), repeat: null, sendEmail: null });
             reply = `Task angelegt — ich schreibe dir um ${exec.toLocaleTimeString("de-DE", {
               hour: "2-digit",
               minute: "2-digit",
@@ -1072,7 +1072,7 @@ ${searchContext ? `\n## Aktuelle Recherche-Daten (${today})\n${searchContext.rep
   startMonitor(addPostfachEntry);
 
   // Scheduler starten
-  startScheduler({ webSearch, addPostfach: addPostfachEntry, sendEmail: null, makeLLMClient });
+  startScheduler({ webSearch, addPostfach: addPostfachEntry, addInbox: addInboxMessage, sendEmail: null, makeLLMClient });
 
   // Permissions aus Disk laden
   loadPerms();

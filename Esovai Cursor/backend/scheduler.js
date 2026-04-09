@@ -11,6 +11,7 @@ const TICK_MS = 60_000; // jede Minute prüfen
 
 let webSearchFn = null;
 let addPostfachFn = null;
+let addInboxFn = null;
 let sendEmailFn = null;
 let llmClientFn = null;
 
@@ -40,6 +41,8 @@ async function executeTask(task) {
         result = sr.results.slice(0, 5)
           .map((r, i) => `${i + 1}. **${r.title}**\n   ${r.snippet || ""}\n   ${r.url}`)
           .join("\n\n");
+      } else {
+        result = `Keine Suchergebnisse gefunden.\n\nQuery: ${task.instruction}`;
       }
     } catch (e) {
       result = `(Suche fehlgeschlagen: ${e.message})`;
@@ -49,10 +52,9 @@ async function executeTask(task) {
   // Mit LLM aufbereiten wenn Ergebnisse vorhanden
   if (result && llmClientFn) {
     try {
-      const client = llmClientFn();
-      const { model } = client._options || {};
+      const { client, model } = llmClientFn();
       const resp = await client.chat.completions.create({
-        model: model || "kimi-k2.5",
+        model,
         messages: [
           { role: "system", content: "Du bist ESO Bot. Fasse die Suchergebnisse kompakt auf Deutsch zusammen. Max 5 Bullet-Points." },
           { role: "user", content: `Aufgabe: ${task.instruction}\n\nSuchergebnisse:\n${result}` }
@@ -69,7 +71,12 @@ async function executeTask(task) {
   const content = result || `Aufgabe "${task.instruction}" wurde ausgeführt (keine Suchergebnisse).`;
   const title = `⏰ ${task.instruction.slice(0, 60)}${task.instruction.length > 60 ? "…" : ""}`;
 
-  // Ins Postfach schreiben
+  // In die Inbox schreiben (als Agent-Nachricht)
+  if (addInboxFn) {
+    await addInboxFn("assistant", content);
+  }
+
+  // Auch ins Postfach (als Archiv)
   if (addPostfachFn) {
     await addPostfachFn(title, content, "info");
   }
@@ -162,9 +169,10 @@ export async function deleteTask(id) {
   await saveTasks(updated);
 }
 
-export function startScheduler({ webSearch, addPostfach, sendEmail, makeLLMClient }) {
+export function startScheduler({ webSearch, addPostfach, addInbox, sendEmail, makeLLMClient }) {
   webSearchFn = webSearch;
   addPostfachFn = addPostfach;
+  addInboxFn = addInbox;
   sendEmailFn = sendEmail;
   llmClientFn = makeLLMClient;
 
