@@ -306,7 +306,19 @@ export async function crawlJobs(webSearch, makeLLMClient) {
     const { addPostfachEntry } = await import("./agent.js");
     for (const p of Object.values(jobStore.results)) {
       if (!p?.content) continue;
-      const lines = (p.content || "").split("\n").filter(l => l.trim() && !l.includes("Keine"));
+      const raw = String(p.content || "").trim();
+      const isErrorLike =
+        /^LLM\b/i.test(raw) ||
+        /^LLM-Fehler\b/i.test(raw) ||
+        /leere Antwort/i.test(raw) ||
+        /^Fehler\b/i.test(raw);
+      const isNoResultsLike =
+        /^Keine Suchergebnisse gefunden\./i.test(raw) ||
+        /^Keine passenden Stellen gefunden\./i.test(raw);
+
+      const lines = (isErrorLike || isNoResultsLike)
+        ? []
+        : raw.split("\n").filter(l => l.trim() && !l.includes("Keine"));
       const count = lines.length;
       const label = p.label || "Profil";
       const title = `💼 ${label}: ${count > 0 ? `${count} Stelle${count !== 1 ? "n" : ""} gefunden` : "Keine Ergebnisse"}`;

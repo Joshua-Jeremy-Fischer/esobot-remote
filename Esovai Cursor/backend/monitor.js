@@ -52,13 +52,19 @@ async function checkHttp(service) {
 // ── Disk Usage Check ──────────────────────────────────────────
 function checkDisk() {
   try {
-    const out = execSync("df -h /data --output=pcent,avail 2>/dev/null | tail -1", {
+    // BusyBox/Alpine: `df` hat kein `--output=...`. Daher Standard-Output parsen:
+    // Filesystem Size Used Avail Use% Mounted on
+    // overlay     10G  2G   8G   20%  /data
+    const out = execSync("df -h /data 2>/dev/null | tail -1", {
       timeout: 3000,
       encoding: "utf8",
     }).trim();
-    const [pct, avail] = out.split(/\s+/);
-    const usedPct = parseInt(pct);
-    return { ok: usedPct < 85, usedPct, avail };
+    const parts = out.split(/\s+/);
+    const pct = parts[4];
+    const avail = parts[3];
+    const usedPct = Number.parseInt(String(pct || "").replace("%", ""), 10);
+    if (!Number.isFinite(usedPct)) return { ok: true, usedPct: null, avail: null };
+    return { ok: usedPct < 85, usedPct, avail: avail || null };
   } catch {
     return { ok: true, usedPct: null, avail: null };
   }
@@ -116,8 +122,12 @@ async function runChecks() {
 
   // Disk Check
   const disk = checkDisk();
-  if (!disk.ok) {
-    alerts.push({ type: "warning", title: `⚠️ Disk Usage: ${disk.usedPct}%`, msg: `Noch ${disk.avail} frei auf /data. Bitte aufräumen!` });
+  if (!disk.ok && disk.usedPct !== null) {
+    alerts.push({
+      type: "warning",
+      title: `⚠️ Disk Usage: ${disk.usedPct}%`,
+      msg: disk.avail ? `Noch ${disk.avail} frei auf /data. Bitte aufräumen!` : "Bitte /data aufräumen!",
+    });
   }
   results.push(disk.usedPct !== null ? `💾 Disk: ${disk.usedPct}% belegt (${disk.avail} frei)` : "💾 Disk: n/a");
 
