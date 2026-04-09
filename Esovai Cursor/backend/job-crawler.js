@@ -174,7 +174,18 @@ async function runSearch(profile, webSearch, makeLLMClient) {
   const crawlerModelOverride = (process.env.JOB_CRAWLER_MODEL || "").trim() || undefined;
   const { client, model } = makeLLMClient(crawlerModelOverride);
   try {
-    const systemContent = profile.systemPrompt +
+    // Viele Reasoning-Modelle (inkl. Kimi-Varianten) geben <think>...</think> aus.
+    // Das kann bei finish_reason=length dazu führen, dass vor dem "eigentlichen" Text nur Thinking kommt.
+    const stripThink = (s) =>
+      String(s || "")
+        .replace(/<think>[\s\S]*?<\/think>/gi, "")
+        .replace(/<\/?think>/gi, "")
+        .trim();
+
+    // /no_think: Best-effort, um CoT zu unterdrücken (falls Modell es unterstützt).
+    const systemContent =
+      "/no_think\n" +
+      profile.systemPrompt +
       "\n\nWICHTIG: Du hast KEINE Tools verfügbar. Antworte AUSSCHLIESSLICH mit reinem Text im vorgegebenen Format. " +
       "Keine Tool-/Funktionsaufrufe, kein JSON, keine Code-Blöcke, keine Markdown-Blöcke. " +
       "Antworte ohne lange Gedankengänge: direkt Ergebniszeilen. Wenn du Platz brauchst, kürze statt abzubrechen.";
@@ -235,7 +246,7 @@ async function runSearch(profile, webSearch, makeLLMClient) {
         max_tokens,
       });
       const choice = response.choices?.[0];
-      const content = (choice?.message?.content || "").trim();
+      const content = stripThink(choice?.message?.content);
       if (content) return content;
 
       const finish = choice?.finish_reason || "unknown";
@@ -255,7 +266,7 @@ async function runSearch(profile, webSearch, makeLLMClient) {
           max_tokens: Math.min(max_tokens, 600),
         });
         const choice2 = response2.choices?.[0];
-        const content2 = (choice2?.message?.content || "").trim();
+        const content2 = stripThink(choice2?.message?.content);
         if (content2) return content2;
         const finish2 = choice2?.finish_reason || "unknown";
         const hasToolCalls2 = !!choice2?.message?.tool_calls?.length;
@@ -307,8 +318,9 @@ export async function crawlJobs(webSearch, makeLLMClient) {
     for (const p of Object.values(jobStore.results)) {
       if (!p?.content) continue;
       const raw = String(p.content || "").trim();
+      const norm = raw.replace(/^\uFEFF/, ""); // BOM/Zero-Width am Anfang abfangen
       const isErrorLike =
-        /^LLM\b/i.test(raw) ||
+        /^(?:\uFEFF)?LLM\b/i.test(norm) ||
         /^LLM-Fehler\b/i.test(raw) ||
         /leere Antwort/i.test(raw) ||
         /^Fehler\b/i.test(raw);
