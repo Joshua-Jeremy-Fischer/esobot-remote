@@ -178,7 +178,20 @@ async function runSearch(profile, webSearch, makeLLMClient) {
       {
         role: "user",
         content:
-          `Hier sind die Suchergebnisse (gekürzt, max ${limit} Treffer):\n\n` +
+          [
+            "AUFGABE: Extrahiere passende Stellenangebote aus den Suchergebnissen.",
+            "",
+            "FORMAT (genau so, pro Stelle genau 1 Zeile):",
+            "Jobtitel | Unternehmen | Standort | Remote-Anteil | Bewerbungslink | Datum",
+            "",
+            "REGELN:",
+            "- Maximal 12 Zeilen insgesamt.",
+            "- Keine Einleitung, keine Bulletpoints, keine zusätzlichen Texte.",
+            "- Wenn nichts passt: schreibe genau: Keine passenden Stellen gefunden.",
+            "",
+            `Suchergebnisse (gekürzt, max ${limit} Treffer):`,
+            "",
+          ].join("\n") +
           allSnippets.slice(0, limit).join("\n\n---\n\n"),
       },
     ]);
@@ -189,7 +202,8 @@ async function runSearch(profile, webSearch, makeLLMClient) {
       const response = await client.chat.completions.create({
         model,
         messages: buildMessages(limit),
-        max_tokens: 1200,
+        temperature: 0.2,
+        max_tokens: 700,
       });
       const choice = response.choices?.[0];
       const content = (choice?.message?.content || "").trim();
