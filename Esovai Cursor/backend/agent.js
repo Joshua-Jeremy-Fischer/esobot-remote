@@ -4,7 +4,7 @@ import { promisify } from "util";
 import fs from "fs/promises";
 import OpenAI from "openai";
 import { startJobCrawler, crawlJobs, getJobResults } from "./job-crawler.js";
-import { startScheduler, createTask, listTasks, deleteTask } from "./scheduler.js";
+import { startScheduler, createTask, listTasks, deleteTask, getRunLog } from "./scheduler.js";
 import { startMonitor, getMonitorStatus } from "./monitor.js";
 import { chromium } from "playwright-core";
 import nodemailer from "nodemailer";
@@ -1179,6 +1179,16 @@ ${searchContext ? `\n## Aktuelle Recherche-Daten (${today})\n${searchContext.rep
     try {
       await deleteTask(req.params.id);
       res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // GET /api/agent/tasks/:id/runs — Run-Log für einen Task (letzte 50 Einträge)
+  router.get("/tasks/:id/runs", async (req, res) => {
+    try {
+      const limit = parseInt(req.query.limit) || 50;
+      res.json({ runs: await getRunLog(req.params.id, limit) });
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
