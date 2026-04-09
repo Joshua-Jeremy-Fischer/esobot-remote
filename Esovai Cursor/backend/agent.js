@@ -8,6 +8,7 @@ import { startScheduler, createTask, listTasks, deleteTask } from "./scheduler.j
 import { startMonitor, getMonitorStatus } from "./monitor.js";
 import { chromium } from "playwright-core";
 import nodemailer from "nodemailer";
+import { parseDurationMs, parseAbsoluteTimeMs } from "./cron-parse.js";
 
 const CHROMIUM_PATH = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || "/usr/bin/chromium-browser";
 
@@ -17,15 +18,18 @@ const execAsync = promisify(exec);
 const ESO_BOT_BASE_URL = (process.env.AGENT_BASE_URL || "").trim().replace(/\/$/, "");
 const ESO_BOT_TOKEN = (process.env.ESO_BOT_TOKEN || "").trim();
 
-async function esoBotCall(path, body) {
+async function esoBotCall(path, body, sessionId) {
   if (!ESO_BOT_BASE_URL) throw new Error("AGENT_BASE_URL fehlt (eso-bot nicht konfiguriert)");
   if (!ESO_BOT_TOKEN) throw new Error("ESO_BOT_TOKEN fehlt (eso-bot Auth)");
+  const headers = {
+    "Content-Type": "application/json",
+    "Authorization": `Bearer ${ESO_BOT_TOKEN}`,
+  };
+  if (sessionId) headers["x-session-id"] = sessionId;
+
   const r = await fetch(`${ESO_BOT_BASE_URL}${path}`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${ESO_BOT_TOKEN}`,
-    },
+    headers,
     body: JSON.stringify(body || {}),
     signal: AbortSignal.timeout(30_000),
   });
@@ -34,38 +38,81 @@ async function esoBotCall(path, body) {
   return data;
 }
 
+// ── Atomic File Write & Mutex ──────────────────────────────
+const fileLocks = {};
+async function withLock(key, fn) {
+  if (!fileLocks[key]) fileLocks[key] = Promise.resolve();
+  let release;
+  const nextLock = new Promise(r => { release = r; });
+  const previousLock = fileLocks[key];
+  fileLocks[key] = fileLocks[key].then(() => nextLock);
+
+  await previousLock;
+  try { return await fn(); }
+  finally { release(); }
+}
+
+async function atomicWrite(targetPath, data) {
+  const tmpPath = `${targetPath}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+  await fs.writeFile(tmpPath, typeof data === "string" ? data : JSON.stringify(data), "utf8");
+  await fs.rename(tmpPath, targetPath);
+}
+
+async function readJsonOrBackup(filePath, fallback) {
+  try {
+    const raw = await fs.readFile(filePath, "utf8");
+    return JSON.parse(raw);
+  } catch (e) {
+    if (e?.code === "ENOENT") return fallback;
+    // JSON korrupt / IO-Fehler → backup + warn
+    try {
+      const bak = `${filePath}.corrupt.${Date.now()}.bak`;
+      const raw = await fs.readFile(filePath, "utf8").catch(() => null);
+      if (raw != null) await fs.writeFile(bak, raw, "utf8");
+      console.warn(`[Store] Korrupte JSON-Datei: ${filePath} → Backup: ${bak} (${e.message})`);
+    } catch {
+      console.warn(`[Store] Korrupte JSON-Datei: ${filePath} (${e?.message || e})`);
+    }
+    return fallback;
+  }
+}
+
 // ── Agent Inbox ────────────────────────────────────────────
 const INBOX_FILE = "/data/agent-inbox.json";
 
 async function readInbox() {
-  try { return JSON.parse(await fs.readFile(INBOX_FILE, "utf8")); } catch { return []; }
+  return readJsonOrBackup(INBOX_FILE, []);
 }
 
 async function writeInbox(messages) {
-  await fs.writeFile(INBOX_FILE, JSON.stringify(messages.slice(-200)));
+  await atomicWrite(INBOX_FILE, messages.slice(-200));
 }
 
 export async function addInboxMessage(role, content) {
-  const messages = await readInbox();
-  messages.push({ id: Date.now() + Math.random(), role, content, timestamp: Date.now() });
-  await writeInbox(messages);
+  return withLock(INBOX_FILE, async () => {
+    const messages = await readInbox();
+    messages.push({ id: Date.now() + Math.random(), role, content, timestamp: Date.now() });
+    await writeInbox(messages);
+  });
 }
 
 // ── Postfach (cron job notifications, email-style) ─────────
 const POSTFACH_FILE = "/data/agent-postfach.json";
 
 async function readPostfach() {
-  try { return JSON.parse(await fs.readFile(POSTFACH_FILE, "utf8")); } catch { return []; }
+  return readJsonOrBackup(POSTFACH_FILE, []);
 }
 
 async function writePostfach(entries) {
-  await fs.writeFile(POSTFACH_FILE, JSON.stringify(entries.slice(-100)));
+  await atomicWrite(POSTFACH_FILE, entries.slice(-100));
 }
 
 export async function addPostfachEntry(title, content, type = "info") {
-  const entries = await readPostfach();
-  entries.unshift({ id: Date.now() + Math.random(), title, content, type, timestamp: Date.now(), read: false });
-  await writePostfach(entries);
+  return withLock(POSTFACH_FILE, async () => {
+    const entries = await readPostfach();
+    entries.unshift({ id: Date.now() + Math.random(), title, content, type, timestamp: Date.now(), read: false });
+    await writePostfach(entries);
+  });
 }
 
 // ── Permissions (persistent in /data/permissions.json) ────
@@ -73,19 +120,27 @@ const PERMS_FILE = "/data/permissions.json";
 const perms = { shell: false, web: false, fileSystem: false, git: false, browser: false, email: false };
 
 async function loadPerms() {
-  try {
-    const raw = await fs.readFile(PERMS_FILE, "utf8");
-    const saved = JSON.parse(raw);
-    for (const key of ["shell", "web", "fileSystem", "git", "browser", "email"]) {
-      if (typeof saved[key] === "boolean") perms[key] = saved[key];
-    }
-    console.log("[Perms] Geladen:", JSON.stringify(perms));
-  } catch { /* Datei existiert noch nicht — defaults bleiben */ }
+  return withLock(PERMS_FILE, async () => {
+    try {
+      const saved = await readJsonOrBackup(PERMS_FILE, null);
+      if (!saved) return;
+      for (const key of ["shell", "web", "fileSystem", "git", "browser", "email"]) {
+        if (typeof saved[key] === "boolean") perms[key] = saved[key];
+      }
+      console.log("[Perms] Geladen:", JSON.stringify(perms));
+    } catch { /* defaults bleiben */ }
+  });
 }
 
 async function savePerms() {
-  try { await fs.writeFile(PERMS_FILE, JSON.stringify(perms)); } catch {}
+  return withLock(PERMS_FILE, async () => {
+    try { await atomicWrite(PERMS_FILE, perms); } catch {}
+  });
 }
+
+// Beim Modul-Start laden, damit Express keinen async-Router braucht.
+// (server.js nutzt createAgentRouter() synchron in app.use)
+await loadPerms();
 
 // ── LLM Client (mirrors server.js provider logic) ─────────
 function makeLLMClient(overrideModel) {
@@ -184,6 +239,8 @@ async function webSearch(query, forceProvider) {
     };
   }
 
+  // Hinweis: "duckduckgo" bleibt als ID aus Kompatibilitätsgründen bestehen,
+  // läuft technisch aber über SearXNG (Engines: bing,google), um CAPTCHA-Probleme zu vermeiden.
   const providers = { tavily: tryTavily, serper: trySerper, brave: tryBrave, searxng: trySearXNG, duckduckgo: trySearXNG };
 
   // Expliziter Provider gewählt
@@ -394,12 +451,12 @@ async function withAgentBrowser(fn) {
 }
 
 // ── Tool executor ──────────────────────────────────────────
-async function executeTool(name, args) {
+async function executeTool(name, args, sessionId) {
   try {
     switch (name) {
       case "bash": {
         if (!perms.shell) return { error: "Shell permission not granted" };
-        if (ESO_BOT_BASE_URL) return await esoBotCall("/tools/bash", { command: args.command ?? "" });
+        if (ESO_BOT_BASE_URL) return await esoBotCall("/tools/bash", { command: args.command ?? "" }, sessionId);
         const { stdout, stderr } = await execAsync(args.command ?? "", {
           timeout: 30_000,
           cwd: "/data",
@@ -413,28 +470,28 @@ async function executeTool(name, args) {
       }
       case "web_fetch": {
         if (!perms.web) return { error: "Web permission not granted" };
-        if (ESO_BOT_BASE_URL) return await esoBotCall("/tools/web_fetch", { url: args.url });
+        if (ESO_BOT_BASE_URL) return await esoBotCall("/tools/web_fetch", { url: args.url }, sessionId);
         const r = await fetch(args.url, { signal: AbortSignal.timeout(15_000) });
         const text = await r.text();
         return { status: r.status, content: text.slice(0, 20_000) };
       }
       case "read_file": {
         if (!perms.fileSystem) return { error: "File system permission not granted" };
-        if (ESO_BOT_BASE_URL) return await esoBotCall("/tools/read_file", { path: args.path });
+        if (ESO_BOT_BASE_URL) return await esoBotCall("/tools/read_file", { path: args.path }, sessionId);
         const p = (args.path ?? "").startsWith("/") ? args.path : `/data/${args.path}`;
         const content = await fs.readFile(p, "utf8");
         return { content: content.slice(0, 50_000) };
       }
       case "write_file": {
         if (!perms.fileSystem) return { error: "File system permission not granted" };
-        if (ESO_BOT_BASE_URL) return await esoBotCall("/tools/write_file", { path: args.path, content: args.content ?? "" });
+        if (ESO_BOT_BASE_URL) return await esoBotCall("/tools/write_file", { path: args.path, content: args.content ?? "" }, sessionId);
         const p = (args.path ?? "").startsWith("/") ? args.path : `/data/${args.path}`;
         await fs.writeFile(p, args.content ?? "", "utf8");
         return { ok: true, path: p };
       }
       case "list_files": {
         if (!perms.fileSystem) return { error: "File system permission not granted" };
-        if (ESO_BOT_BASE_URL) return await esoBotCall("/tools/list_files", { path: args.path || "." });
+        if (ESO_BOT_BASE_URL) return await esoBotCall("/tools/list_files", { path: args.path || "." }, sessionId);
         const p = args.path || "/data";
         const entries = await fs.readdir(p, { withFileTypes: true });
         return { files: entries.map(e => ({ name: e.name, type: e.isDirectory() ? "dir" : "file" })) };
@@ -551,7 +608,8 @@ export function createAgentRouter() {
         { id: "tavily",     label: "Tavily",                 configured: !!process.env.TAVILY_API_KEY },
         { id: "serper",     label: "Serper (Google)",        configured: !!process.env.SERPER_API_KEY },
         { id: "brave",      label: "Brave Search",           configured: !!process.env.BRAVE_API_KEY },
-        { id: "duckduckgo", label: "DuckDuckGo",             configured: true },
+        { id: "searxng",    label: "SearXNG (intern)",        configured: true },
+        { id: "duckduckgo", label: "DuckDuckGo (via SearXNG)",configured: true },
       ],
     });
   });
@@ -559,7 +617,7 @@ export function createAgentRouter() {
   // POST /api/agent/search-providers — aktiven Provider setzen
   router.post("/search-providers", (req, res) => {
     const { provider } = req.body;
-    const valid = ["auto", "tavily", "serper", "brave", "duckduckgo"];
+    const valid = ["auto", "tavily", "serper", "brave", "searxng", "duckduckgo"];
     if (!valid.includes(provider)) return res.status(400).json({ error: `Ungültig. Erlaubt: ${valid.join(", ")}` });
     preferredSearchProvider = provider;
     res.json({ active: preferredSearchProvider });
@@ -589,6 +647,7 @@ export function createAgentRouter() {
   // POST /api/agent — wake/sleep OR run agentic task
   router.post("/", async (req, res) => {
     const { action, messages, system, maxIterations = 8, preSearch = false } = req.body;
+    const sessionId = req.body.sessionId || req.headers["x-session-id"];
 
     // Sleep/Wake toggle
     if (action === "wake") {
@@ -642,8 +701,11 @@ export function createAgentRouter() {
       }
     }
 
+    // Single source of truth:
+    // - erst Injection in baseMessages
+    // - dann optional ein system-Override, ohne Injection/History zu verlieren
     const msgs = system
-      ? [{ role: "system", content: system }, ...messages]
+      ? [{ role: "system", content: system }, ...baseMessages.filter(m => m.role !== "system")]
       : baseMessages;
 
     const toolDefs = getActiveToolDefinitions();
@@ -673,7 +735,7 @@ export function createAgentRouter() {
         for (const tc of choice.message.tool_calls) {
           let args = {};
           try { args = JSON.parse(tc.function.arguments); } catch {}
-          const result = await executeTool(tc.function.name, args);
+          const result = await executeTool(tc.function.name, args, sessionId);
           msgs.push({ role: "tool", tool_call_id: tc.id, content: JSON.stringify(result) });
         }
 
@@ -694,14 +756,79 @@ export function createAgentRouter() {
 
   // Hilfsfunktion: Zeitangabe aus User-Text entfernen → saubere Instruction für den Scheduler
   function extractInstruction(text) {
-    return text
+    const cleaned = String(text || "")
       .replace(/\[\s*jetzt\s*\+\s*\d+\s*(?:min|m)\s*\]/gi, "")  // [jetzt+3min]
       .replace(/\bjetzt\s*\+\s*\d+\s*(?:min|m)\b/gi, "")          // jetzt+3min
-      .replace(/\bin\s+\d+\s*(?:minuten|min|m)\b/gi, "")           // in 3 Minuten
+      .replace(/\bin\s+\d+(?:[.,]\d+)?\s*(?:minuten|min|stunden?|h|sekunden?|s|tagen?|d|ms)\b/gi, "") // in 3 Minuten / in 1h30m
       .replace(/\bum\s+\d{1,2}[:.]\d{2}\s*uhr?\b/gi, "")          // um 13:40 / um 13:40 Uhr
-      .replace(/\bschreib\s+(?:mir\s+)?(?:eine?\s+)?(?:nachricht\s+)?in\s+die\s+inbox\b/gi, "") // "schreib mir in die Inbox"
+      // typische Floskeln rund um "Inbox" entfernen
+      .replace(/\bschreib(?:e)?\s+(?:mir\s+)?(?:bitte\s+)?(?:eine?\s+)?(?:nachricht\s+)?(?:in\s+die\s+inbox|inbox)\b/gi, "")
+      .replace(/\b(schick(?:e)?|sende(?:\s+mir)?)\s+(?:mir\s+)?(?:eine?\s+)?(?:nachricht\s+)?(?:in\s+die\s+inbox|inbox)\b/gi, "")
+      .replace(/^[\s"'`]+|[\s"'`]+$/g, "")
       .replace(/\s{2,}/g, " ")
       .trim();
+
+    const topicMatch = cleaned.match(/\b(?:über|zu|zum|zur|bezüglich|betreffend)\s+(.+)$/i);
+    const topic = (topicMatch?.[1] || cleaned).trim();
+
+    return topic
+      .replace(/^[\s"'`]+|[\s"'`]+$/g, "")
+      .replace(/^\bum\b\s*/i, "")
+      .replace(/\s{2,}/g, " ")
+      .trim();
+  }
+
+  /**
+   * Erkennt Zeitangaben im User-Text und gibt ein CronSchedule-Objekt zurück.
+   * Unterstützt:
+   *   - Relative Zeiten: "in 3 Minuten", "in 1h30m", "jetzt+5min", "in 45s"
+   *   - Absolute Zeiten: "um 13:40", "um 09:00 Uhr"
+   * Gibt null zurück wenn keine Zeitangabe erkannt wurde.
+   */
+  function buildSchedule(userMsg) {
+    const now = Date.now();
+
+    // ── 1. Relative Zeit via parseDurationMs ──────────────────
+    // Patterns: "in 3 Minuten", "in 1h30m", "jetzt+5min", "[jetzt+3min]"
+    const relPatterns = [
+      // "in <duration>" — z.B. "in 3 Minuten", "in 1h30m", "in 45s"
+      /\bin\s+([\w.]+(?:\s*[\w.]+)?)\b/i,
+      // "[jetzt+<duration>]" oder "jetzt+<duration>"
+      /\[?\s*jetzt\s*\+\s*([\w.]+)\s*\]?/i,
+    ];
+
+    for (const pattern of relPatterns) {
+      const m = userMsg.match(pattern);
+      if (!m) continue;
+
+      // Extrahiere den Duration-Token und normalisiere "Minuten" → "m", etc.
+      const raw = m[1].trim()
+        .replace(/minuten?/i, "m")
+        .replace(/stunden?/i, "h")
+        .replace(/sekunden?/i, "s")
+        .replace(/tagen?/i,    "d")
+        .replace(/\s+/g, "");
+
+      const ms = parseDurationMs(raw);
+      if (ms != null && ms > 0) {
+        const atMs     = now + Math.max(ms, 30_000); // mindestens 30s in der Zukunft
+        const atIso    = new Date(atMs).toISOString();
+        return { kind: "at", at: atIso };
+      }
+    }
+
+    // ── 2. Absolute Uhrzeit "um HH:MM [Uhr]" ─────────────────
+    const timeMatch = userMsg.match(/um\s+(\d{1,2})[:.:](\d{2})\s*uhr?/i);
+    if (timeMatch) {
+      const hh   = parseInt(timeMatch[1], 10);
+      const mm   = parseInt(timeMatch[2], 10);
+      const exec = new Date();
+      exec.setHours(hh, mm, 0, 0);
+      if (exec.getTime() <= now) exec.setDate(exec.getDate() + 1); // morgen falls vorbei
+      return { kind: "at", at: exec.toISOString() };
+    }
+
+    return null;
   }
 
   // POST /api/agent/inbox — User schreibt, Agent antwortet (mit Web-Suche + Postfach-Action)
@@ -903,75 +1030,46 @@ ${searchContext ? `\n## Aktuelle Recherche-Daten (${today})\n${searchContext.rep
         .trim();
 
       // ── Zeitplan-Erkennung: prüfe ob LLM einen Task anlegen will ──
-      // Muster: "TASK: <ISO>|<instruction>" im Reply (vom LLM generiert)
-      // Alternativ: direkte Uhrzeit-Erkennung im User-Input als Fallback
+      // Muster: "SCHEDULE_TASK: <ISO>|<instruction>" im Reply (vom LLM generiert)
+      // Alternativ: direkte Zeitangabe-Erkennung im User-Input als Fallback
       let reply = rawReply;
       const taskDirective = rawReply.match(/SCHEDULE_TASK:\s*(\S+)\s*\|\s*(.+)/i);
       if (taskDirective) {
         const [, isoTime, instruction] = taskDirective;
         try {
-          const task = await createTask({ instruction: instruction.trim(), executeAt: isoTime.trim(), repeat: null, sendEmail: null });
-          // Wichtig: bei Scheduler immer eine kurze Bestätigung zurückgeben,
-          // damit kein halluzinierter POST-/XML-Block im Reply stehen bleibt.
-          reply = `Task angelegt — ich schreibe dir um ${new Date(task.executeAt).toLocaleTimeString("de-DE", {
-            hour: "2-digit",
-            minute: "2-digit",
-            timeZone: "Europe/Berlin",
+          const atMs = parseAbsoluteTimeMs(isoTime.trim());
+          const schedule = atMs ? { kind: "at", at: new Date(atMs).toISOString() } : { kind: "at", at: isoTime.trim() };
+          const task = await createTask({ name: instruction.trim(), schedule, payload: { kind: "agentTurn", message: instruction.trim() } });
+          reply = `Task angelegt — ich schreibe dir um ${new Date(task.state.nextRunAtMs).toLocaleTimeString("de-DE", {
+            hour: "2-digit", minute: "2-digit", timeZone: "Europe/Berlin",
           })} Uhr in die Inbox.`;
-          console.log(`[Inbox] Scheduler-Task angelegt via LLM: "${task.instruction}" um ${task.executeAt}`);
+          console.log(`[Inbox] Scheduler-Task angelegt via LLM: "${task.name}" um ${new Date(task.state.nextRunAtMs).toISOString()}`);
         } catch (e) {
           console.warn("[Inbox] Task-Anlage fehlgeschlagen:", e.message);
         }
       } else {
-        // Fallback: relative Zeit erkennen (z.B. "jetzt+3min", "[jetzt+3min]", "in 3 Minuten")
-        const relMatch =
-          userMsg.match(/\[\s*jetzt\s*\+\s*(\d{1,4})\s*(?:min|m)\s*\]/i) ||
-          userMsg.match(/\bjetzt\s*\+\s*(\d{1,4})\s*(?:min|m)\b/i) ||
-          userMsg.match(/\bin\s+(\d{1,4})\s*(?:minuten|min|m)\b/i);
-
+        // Fallback: Zeitangabe direkt im User-Prompt erkennen (robuster Parser via cron-parse.js)
         const hasScheduleIntent =
-          /später|um \d|schreib.*mir.*um|sende.*um|erinner|um \d{1,2}[:.]\d{2}|\bjetzt\s*\+|\bin\s+\d+\s*(?:minuten|min|m)\b/i.test(
-            userMsg
-          );
+          /später|um \d|schreib.*mir.*um|sende.*um|erinner|um \d{1,2}[:.]\d{2}|\bjetzt\s*\+|\bin\s+\d+|\bin\s+\w/i.test(userMsg);
 
-        if (relMatch && hasScheduleIntent) {
-          const mins = Math.max(1, Math.min(24 * 60, parseInt(relMatch[1], 10) || 0));
-          const execUTC = new Date(Date.now() + mins * 60_000);
-          try {
-            const cleanInstruction = extractInstruction(userMsg) || userMsg;
-            const task = await createTask({ instruction: cleanInstruction, executeAt: execUTC.toISOString(), repeat: null, sendEmail: null });
-            reply = `Task angelegt — ich schreibe dir um ${new Date(task.executeAt).toLocaleTimeString("de-DE", {
-              hour: "2-digit",
-              minute: "2-digit",
-              timeZone: "Europe/Berlin",
-            })} Uhr in die Inbox.`;
-            console.log(`[Inbox] Relative Zeit erkannt (+${mins}min) → Task angelegt: "${task.instruction}" um ${task.executeAt}`);
-          } catch (e) {
-            console.warn("[Inbox] Relative Fallback Task-Anlage fehlgeschlagen:", e.message);
-          }
-        }
-
-        // Fallback: Uhrzeit im User-Prompt direkt erkennen (z.B. "um 13:40")
-        const timeMatch = userMsg.match(/um\s+(\d{1,2})[:\.](\d{2})\s*uhr?/i);
-        if (!relMatch && timeMatch && hasScheduleIntent) {
-          const [, hh, mm] = timeMatch;
-          const now = new Date();
-          const exec = new Date(now);
-          exec.setHours(parseInt(hh, 10), parseInt(mm, 10), 0, 0);
-          // Falls Uhrzeit bereits vorbei ist → morgen
-          if (exec <= now) exec.setDate(exec.getDate() + 1);
-          try {
-            // Container läuft in Europe/Berlin (TZ + tzdata) → exec.toISOString() ist korrekt (inkl. DST)
-            const cleanInstruction = extractInstruction(userMsg) || userMsg;
-            const task = await createTask({ instruction: cleanInstruction, executeAt: exec.toISOString(), repeat: null, sendEmail: null });
-            reply = `Task angelegt — ich schreibe dir um ${exec.toLocaleTimeString("de-DE", {
-              hour: "2-digit",
-              minute: "2-digit",
-              timeZone: "Europe/Berlin",
-            })} Uhr in die Inbox.`;
-            console.log(`[Inbox] Fallback-Scheduler-Task angelegt: "${task.instruction}" um ${task.executeAt}`);
-          } catch (e) {
-            console.warn("[Inbox] Fallback Task-Anlage fehlgeschlagen:", e.message);
+        if (hasScheduleIntent) {
+          const schedule = buildSchedule(userMsg);
+          if (schedule) {
+            try {
+              const cleanInstruction = extractInstruction(userMsg) || userMsg;
+              const task = await createTask({
+                name:     cleanInstruction,
+                schedule,
+                payload:  { kind: "agentTurn", message: cleanInstruction },
+              });
+              const runAt = task.state.nextRunAtMs;
+              reply = `Task angelegt — ich schreibe dir um ${new Date(runAt).toLocaleTimeString("de-DE", {
+                hour: "2-digit", minute: "2-digit", timeZone: "Europe/Berlin",
+              })} Uhr in die Inbox.`;
+              console.log(`[Inbox] Zeitplan erkannt → Task angelegt: "${task.name}" um ${new Date(runAt).toISOString()}`);
+            } catch (e) {
+              console.warn("[Inbox] Zeitplan Task-Anlage fehlgeschlagen:", e.message);
+            }
           }
         }
       }
@@ -1032,8 +1130,22 @@ ${searchContext ? `\n## Aktuelle Recherche-Daten (${today})\n${searchContext.rep
 
   // ── Scheduler API ─────────────────────────────────────────────
   // POST /api/agent/tasks — neuen Task anlegen
+  // Akzeptiert neues Format { name, schedule, payload } ODER altes { instruction, executeAt, repeat }
   router.post("/tasks", async (req, res) => {
-    const { instruction, executeAt, repeat, sendEmail } = req.body;
+    const { name, schedule, payload, instruction, executeAt, repeat, sendEmail } = req.body;
+
+    // Neues Format: schedule-Objekt direkt
+    if (schedule) {
+      if (!name && !instruction) return res.status(400).json({ error: "name oder instruction fehlt" });
+      try {
+        const task = await createTask({ name, schedule, payload, instruction, sendEmail: sendEmail || null });
+        return res.json({ ok: true, task });
+      } catch (e) {
+        return res.status(500).json({ error: e.message });
+      }
+    }
+
+    // Legacy-Format: executeAt + repeat
     if (!instruction?.trim()) return res.status(400).json({ error: "instruction fehlt" });
     if (!executeAt) return res.status(400).json({ error: "executeAt (ISO string) fehlt" });
     const parsed = new Date(executeAt);
@@ -1073,9 +1185,6 @@ ${searchContext ? `\n## Aktuelle Recherche-Daten (${today})\n${searchContext.rep
 
   // Scheduler starten
   startScheduler({ webSearch, addPostfach: addPostfachEntry, addInbox: addInboxMessage, sendEmail: null, makeLLMClient });
-
-  // Permissions aus Disk laden
-  loadPerms();
 
   return router;
 }
