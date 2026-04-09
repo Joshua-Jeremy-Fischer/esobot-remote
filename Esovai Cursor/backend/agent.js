@@ -891,7 +891,7 @@ Nie über deine eigene Arbeitsweise philosophieren. Nie fragen "Wie soll ich als
 **BEI UNKLARHEIT:** Eine kurze Frage, dann warten. Nicht 5 Szenarien durchspielen.
 
 Antworte auf Deutsch. Sei knapp und direkt wie ein Kollege, nicht wie ein Assistent.
-${activeTools.length > 0 ? `\n## Aktive Tools\n${activeTools.map(t => `- ${t}`).join("\n")}` : ""}
+Du hast in diesem Chat KEINE Tool-Aufruf-Fähigkeiten. Schreibe KEINEN XML- oder Funktions-Code. Antworte nur als Text.
 ${searchContext ? `\n## Aktuelle Recherche-Daten (${today})\n${searchContext.replace(/\[Aktuelle Web-Suchergebnisse.*?\]\n/s, "").replace(/\n\[Ende Suchergebnisse\]/, "")}` : ""}`;
 
       const msgs = [
@@ -902,6 +902,10 @@ ${searchContext ? `\n## Aktuelle Recherche-Daten (${today})\n${searchContext.rep
       const rawReply = (response.choices[0].message.content || "")
         .replace(/<think>[\s\S]*?<\/think>/gi, "")
         .replace(/<\/?think>/gi, "")
+        // Strip halluzinierte XML-Tool-Calls (Modell schreibt Tool-Syntax als Text)
+        .replace(/<function_calls>[\s\S]*?<\/function_calls>/gi, "")
+        .replace(/<invoke[\s\S]*?<\/invoke>/gi, "")
+        .replace(/<parameter[\s\S]*?<\/antml:parameter>/gi, "")
         .trim();
 
       // ── Zeitplan-Erkennung: prüfe ob LLM einen Task anlegen will ──
