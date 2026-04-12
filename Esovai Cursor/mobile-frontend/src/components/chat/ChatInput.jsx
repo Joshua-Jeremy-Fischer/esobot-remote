@@ -1,9 +1,9 @@
 import { useState, useRef, useCallback } from "react";
-import { Send, Camera, Globe } from "lucide-react";
+import { Send, Camera, Globe, Hammer } from "lucide-react";
 import VoiceButton from "./VoiceButton";
 import QuickActionChips from "./QuickActionChips";
 
-export default function ChatInput({ onSend, disabled, webMode, onWebModeToggle }) {
+export default function ChatInput({ onSend, disabled, webMode, onWebModeToggle, buildMode, onBuildModeToggle }) {
   const [text, setText] = useState("");
   const [imageUrl, setImageUrl] = useState(null);
   const [uploading, setUploading] = useState(false);
@@ -116,6 +116,16 @@ export default function ChatInput({ onSend, disabled, webMode, onWebModeToggle }
           }`}
         >
           <Globe className="w-5 h-5" />
+        </button>
+
+        <button
+          onClick={onBuildModeToggle}
+          title={buildMode ? "Build-Modus aktiv (Multi-Agent)" : "Build-Modus aktivieren"}
+          className={`min-w-[44px] min-h-[44px] flex items-center justify-center rounded-full transition-all active:scale-95 ${
+            buildMode ? "bg-purple-500 text-white" : "bg-secondary text-muted-foreground"
+          }`}
+        >
+          <Hammer className="w-5 h-5" />
         </button>
 
         <button

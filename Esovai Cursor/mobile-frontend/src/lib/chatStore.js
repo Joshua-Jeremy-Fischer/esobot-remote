@@ -58,6 +58,15 @@ export function addMessage(chatId, role, content, imageUrl) {
   return updateChat(chatId, { messages: chat.messages });
 }
 
+export function updateMessage(chatId, msgId, content) {
+  const chat = getChat(chatId);
+  if (!chat) return null;
+  const msg = chat.messages.find(m => m.id === msgId);
+  if (!msg) return null;
+  msg.content = content;
+  return updateChat(chatId, { messages: chat.messages });
+}
+
 export function loadSettings() {
   const raw = localStorage.getItem(SETTINGS_KEY);
   return raw ? JSON.parse(raw) : {

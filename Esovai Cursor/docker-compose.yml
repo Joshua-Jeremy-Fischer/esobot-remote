@@ -115,6 +115,24 @@ services:
     networks:
       - app-net
 
+  langchain-agent:
+    build: ./langchain-agent
+    container_name: langchain-agent
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PORT: "8001"
+      ESO_BOT_BASE_URL: "http://eso-bot:3020"
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=10m,mode=1777
+    networks:
+      - app-net
+    depends_on:
+      - eso-bot
+
 networks:
   app-net:
     driver: bridge

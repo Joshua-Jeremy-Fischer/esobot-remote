@@ -233,6 +233,75 @@ app.use("/api/chat", rateLimit({
 // Agent Endpoint (Shell / Web / File / Git — Permissions via toggles)
 app.use("/api/agent", createAgentRouter());
 
+// ── LangGraph Multi-Agent Workflow ───────────────────────
+const LANGCHAIN_AGENT_URL = (process.env.LANGCHAIN_AGENT_URL || "http://langchain-agent:8001").replace(/\/$/, "");
+
+app.use("/api/workflow", rateLimit({ windowMs: 60_000, max: 5, standardHeaders: true, legacyHeaders: false }));
+
+app.post("/api/workflow", async (req, res) => {
+  const { task } = req.body;
+  if (!task?.trim()) return res.status(400).json({ error: "task fehlt oder leer" });
+  try {
+    const upstream = await fetch(`${LANGCHAIN_AGENT_URL}/workflow/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ task: task.trim() }),
+      signal: AbortSignal.timeout(300_000),
+    });
+    const data = await upstream.json();
+    if (!upstream.ok) return res.status(upstream.status).json(data);
+    res.json(data);
+  } catch (err) {
+    console.error("[Workflow] Proxy error:", err.message);
+    res.status(502).json({ error: "Workflow-Service nicht erreichbar" });
+  }
+});
+
+app.get("/api/workflow/stream", async (req, res) => {
+  const task = req.query.task?.trim();
+  if (!task) return res.status(400).json({ error: "task query param fehlt" });
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+
+  try {
+    const upstream = await fetch(
+      `${LANGCHAIN_AGENT_URL}/workflow/stream?task=${encodeURIComponent(task)}`,
+      { signal: AbortSignal.timeout(300_000) },
+    );
+    if (!upstream.ok || !upstream.body) {
+      const body = await upstream.text().catch(() => "");
+      res.write(`data: ${JSON.stringify({ error: body || `Upstream error ${upstream.status}` })}\n\n`);
+      res.end();
+      return;
+    }
+
+    const reader = upstream.body.getReader();
+    const decoder = new TextDecoder();
+    const heartbeat = setInterval(() => {
+      if (!res.writableEnded) res.write(": ping\n\n");
+    }, 15_000);
+
+    req.on("close", () => {
+      clearInterval(heartbeat);
+      reader.cancel().catch(() => {});
+    });
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) { clearInterval(heartbeat); res.end(); break; }
+      res.write(decoder.decode(value, { stream: true }));
+    }
+  } catch (err) {
+    console.error("[Workflow/Stream] Proxy error:", err.message);
+    res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
+    res.end();
+  }
+});
+
 // Monitor Status Endpoint (auth-geschützt)
 app.get("/api/monitor/status", async (_req, res) => {
   try {

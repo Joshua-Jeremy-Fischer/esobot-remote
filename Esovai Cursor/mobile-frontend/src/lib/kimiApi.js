@@ -43,3 +43,49 @@ export async function getAgentStatus() {
   if (!res.ok) throw new Error(`Agent status error: ${res.status}`);
   return res.json();
 }
+
+export async function runWorkflow(task) {
+  const res = await fetch(`${BASE_URL}/api/workflow`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({ task })
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Workflow API error: ${res.status}`);
+  }
+  return res.json();
+}
+
+/**
+ * Stream workflow agent steps via SSE.
+ * Returns the EventSource — caller must call .close() on unmount.
+ * onStep(data)  — called for each intermediate agent node
+ * onDone(data)  — called once with the final result (data.done === true)
+ * onError(err)  — called on connection error
+ */
+export function streamWorkflow(task, onStep, onDone, onError) {
+  const url = `${BASE_URL}/api/workflow/stream?task=${encodeURIComponent(task)}`;
+  const es = new EventSource(url);
+
+  es.onmessage = (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      if (data.done) {
+        onDone(data);
+        es.close();
+      } else {
+        onStep(data);
+      }
+    } catch {
+      // ignore malformed frames
+    }
+  };
+
+  es.onerror = (err) => {
+    onError(err);
+    es.close();
+  };
+
+  return es;
+}

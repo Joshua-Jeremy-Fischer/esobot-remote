@@ -2,8 +2,8 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { ChevronLeft, ChevronDown } from "lucide-react";
 import ProviderSheet, { getActiveProvider, getActiveModel } from "../components/chat/ProviderSheet";
-import { getChat, addMessage, updateChat, deleteChat } from "../lib/chatStore";
-import { sendChatMessage, sendAgentTask } from "../lib/kimiApi";
+import { getChat, addMessage, updateMessage, updateChat, deleteChat } from "../lib/chatStore";
+import { sendChatMessage, sendAgentTask, streamWorkflow } from "../lib/kimiApi";
 import { loadSettings } from "../lib/chatStore";
 import ChatBubble from "../components/chat/ChatBubble";
 import ChatInput from "../components/chat/ChatInput";
@@ -20,8 +20,18 @@ export default function ChatView() {
   const [activeProvider, setActiveProvider] = useState(getActiveProvider());
   const [activeModel, setActiveModel] = useState(getActiveModel());
   const [webMode, setWebMode] = useState(false);
+  const [buildMode, setBuildMode] = useState(false);
+  const [buildNode, setBuildNode] = useState(null);
   const scrollRef = useRef(null);
   const bottomRef = useRef(null);
+  const esRef = useRef(null);
+
+  // Close stream on unmount or chat navigation
+  useEffect(() => {
+    return () => {
+      if (esRef.current) { esRef.current.close(); esRef.current = null; }
+    };
+  }, [chatId]);
 
   // Keyboard-aware: scroll to bottom when virtual keyboard opens
   useEffect(() => {
@@ -74,22 +84,71 @@ export default function ChatView() {
   const handleSend = useCallback(async (text, imageUrl) => {
     if (!text && !imageUrl) return;
 
+    // Close any running stream before starting a new one
+    if (esRef.current) { esRef.current.close(); esRef.current = null; }
+
     const content = imageUrl ? `[Bild]\n${text}` : text;
     let updated = addMessage(chatId, "user", content, imageUrl);
     setChat(updated);
     setAutoScroll(true);
     setIsTyping(true);
 
-    const settings = loadSettings();
-    const messages = updated.messages.map(m => ({
-      role: m.role,
-      content: m.content
-    }));
+    // ── Build mode: SSE streaming path ──────────────────────
+    if (buildMode) {
+      updated = addMessage(chatId, "assistant", "⚙️ **Build gestartet…**");
+      const msgId = updated.messages[updated.messages.length - 1].id;
+      setChat(updated);
 
-    // Add system prompt
+      const accSteps = [];
+
+      esRef.current = streamWorkflow(
+        text,
+        // onStep — live update mit akkumulierten Steps
+        (data) => {
+          accSteps.push(...(data.steps || []));
+          const node = data.node || "";
+          if (node) setBuildNode(node);
+          const stepLines = accSteps.map(s => `- ${s}`).join("\n");
+          const live = `⚙️ **Build läuft** _(${node || "…"})_\n\n${stepLines}`;
+          const next = updateMessage(chatId, msgId, live);
+          if (next) setChat(next);
+        },
+        // onDone — finales Ergebnis ersetzen
+        (data) => {
+          esRef.current = null;
+          const output = data.final_output || data.code || "Build abgeschlossen — kein Output.";
+          const qa = data.qa_feedback ? `\n\n---\n**QA:** ${data.qa_feedback}` : "";
+          const allSteps = (data.steps || []);
+          accSteps.push(...allSteps);
+          const stepLines = accSteps.length ? `\n\n---\n**Steps:**\n${accSteps.map(s => `- ${s}`).join("\n")}` : "";
+          const final = `${output}${qa}${stepLines}`;
+          const next = updateMessage(chatId, msgId, final);
+          if (next) {
+            setChat(next);
+            if (next.messages.length === 2 && next.title === "Neuer Chat") {
+              generateTitle(text, output);
+            }
+          }
+          setBuildNode(null);
+          setIsTyping(false);
+        },
+        // onError
+        (err) => {
+          esRef.current = null;
+          const next = updateMessage(chatId, msgId, `⚠️ Build-Fehler: ${err.message || "Stream unterbrochen"}`);
+          if (next) setChat(next);
+          setBuildNode(null);
+          setIsTyping(false);
+        }
+      );
+      return; // early return — isTyping bleibt true bis onDone/onError
+    }
+
+    // ── Chat / Web-Search paths ──────────────────────────────
+    const settings = loadSettings();
     const systemMessages = [
       { role: "system", content: settings.systemPrompt },
-      ...messages
+      ...updated.messages.map(m => ({ role: m.role, content: m.content }))
     ];
 
     try {
@@ -109,11 +168,8 @@ export default function ChatView() {
           || response?.content
           || "Keine Antwort erhalten.";
       }
-      
       updated = addMessage(chatId, "assistant", reply);
       setChat(updated);
-
-      // Auto-title after first exchange
       if (updated.messages.length === 2 && updated.title === "Neuer Chat") {
         generateTitle(text, reply);
       }
@@ -123,7 +179,7 @@ export default function ChatView() {
     } finally {
       setIsTyping(false);
     }
-  }, [chatId, webMode]);
+  }, [chatId, webMode, buildMode]);
 
   const handleRename = (newTitle) => {
     const updated = updateChat(chatId, { title: newTitle });
@@ -173,7 +229,7 @@ export default function ChatView() {
               onClick={() => setProviderOpen(true)}
               className="flex items-center gap-0.5 text-[11px] text-muted-foreground active:text-foreground transition-colors"
             >
-              <span>{isTyping ? (webMode ? "Sucht im Web..." : "Schreibt...") : `${activeProvider.label}${activeModel?.id ? ` · ${activeModel.label}` : ""}`}</span>
+              <span>{isTyping ? (buildMode ? (buildNode ? `${buildNode}…` : "Baut…") : webMode ? "Sucht im Web…" : "Schreibt…") : `${activeProvider.label}${activeModel?.id ? ` · ${activeModel.label}` : ""}`}</span>
               <ChevronDown className="w-3 h-3" />
             </button>
           </div>
@@ -214,6 +270,8 @@ export default function ChatView() {
         disabled={isTyping}
         webMode={webMode}
         onWebModeToggle={() => setWebMode(w => !w)}
+        buildMode={buildMode}
+        onBuildModeToggle={() => setBuildMode(b => !b)}
       />
 
       <ProviderSheet open={providerOpen} onClose={handleProviderClose} />
