@@ -54,7 +54,14 @@ Läuft alle 6 Stunden automatisch. Sucht in drei Profilen:
 Manueller Run: `curl -X POST http://localhost:3010/api/agent/jobs/run`
 
 ### SOC Monitor
-Prüft alle 10 Minuten: Ollama, SearXNG, Disk, RAM. Schreibt Alerts ins Postfach + Web Push.
+Prüft alle 10 Minuten: Ollama, SearXNG, Disk, RAM **und Wazuh-Alerts**. Schreibt Alerts ins Postfach + Web Push.
+
+**Wazuh-Integration (optional):**
+- Fragt Wazuh Indexer (OpenSearch) nach Alerts mit Level ≥ 10 der letzten 10 Minuten
+- Kritische Alerts (Level ≥ `WAZUH_ALERT_LEVEL`, default 12) → sofortiger Postfach-Alert
+- High-Alerts (Level 10–11) → max. 1× pro Stunde
+- Wazuh Agent-Status (active/offline) via Manager REST API
+- Zugang über `host.docker.internal` (extra_hosts in docker-compose.yml)
 
 ### Multi-Agent Workflow (LangGraph)
 Pipeline: Researcher → Coder → QA → Fixer (bis 3 Iterationen)
@@ -102,6 +109,17 @@ VAPID_SUBJECT=mailto:...
 # eso-bot
 ALLOW_SHELL=true
 ALLOW_GIT=false
+
+# Wazuh (optional — SOC Monitor)
+# Wazuh läuft in separatem Stack; über host.docker.internal erreichbar
+WAZUH_INDEXER_URL=https://host.docker.internal:9201   # Wazuh Indexer (OpenSearch)
+WAZUH_MANAGER_URL=https://host.docker.internal:55000  # Wazuh Manager REST API
+WAZUH_ADMIN_USER=admin
+WAZUH_ADMIN_PASS=...
+WAZUH_ALERT_LEVEL=12   # 12=critical, 10=high (default: 12)
+
+# Job-Crawler LLM (optional — überschreibt DEFAULT_MODEL)
+# JOB_CRAWLER_MODEL=kimi-k2.5:cloud
 ```
 
 ## Ollama Setup (Kimi K2.5 cloud)

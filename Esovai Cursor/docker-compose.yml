@@ -18,6 +18,9 @@ services:
       DB_PATH: /data/kimi.db
     volumes:
       - kimi_data:/data
+    # Wazuh läuft in einem separaten Stack → über Host-IP erreichbar
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - app-net
 

@@ -1,14 +1,26 @@
 /**
  * ESO Bot — SOC Monitor
- * Checkt alle 10 Minuten die Health der Docker-Services.
+ * Checkt alle 10 Minuten die Health der Docker-Services + Wazuh-Alerts.
  * Schreibt Alerts/Zusammenfassungen ins Postfach.
  */
 
 import fs from "fs/promises";
+import https from "node:https";
 import { execSync } from "child_process";
 
 const STATE_FILE = "/data/monitor-state.json";
 const CHECK_INTERVAL_MS = 10 * 60 * 1000; // 10 Minuten
+
+// ── Wazuh Konfiguration (optional, via .env) ──────────────────
+// Wazuh läuft in einem separaten Stack; Zugang über host.docker.internal
+// (extra_hosts: host-gateway in docker-compose.yml des Backend-Services)
+const WAZUH_INDEXER  = (process.env.WAZUH_INDEXER_URL  || "").trim();  // z.B. https://host.docker.internal:9201
+const WAZUH_MANAGER  = (process.env.WAZUH_MANAGER_URL  || "").trim();  // z.B. https://host.docker.internal:55000
+const WAZUH_USER     = (process.env.WAZUH_ADMIN_USER   || "admin").trim();
+const WAZUH_PASS     = (process.env.WAZUH_ADMIN_PASS   || "").trim();
+const WAZUH_ENABLED  = !!(WAZUH_INDEXER || WAZUH_MANAGER);
+// Mindest-Level für Alert-Postfach: 12 = critical, 10 = high
+const WAZUH_ALERT_LEVEL = parseInt(process.env.WAZUH_ALERT_LEVEL || "12", 10);
 
 // Services die gecheckt werden
 const SERVICES = [
@@ -85,6 +97,143 @@ function checkMemory() {
   }
 }
 
+// ── Wazuh HTTPS-Helper ────────────────────────────────────────
+// Wazuh nutzt selbst-signierte Zertifikate → rejectUnauthorized:false
+function wazuhHttps(method, urlStr, headers, body) {
+  return new Promise((resolve, reject) => {
+    let u;
+    try { u = new URL(urlStr); } catch { return reject(new Error(`Ungültige URL: ${urlStr}`)); }
+    const options = {
+      hostname: u.hostname,
+      port: parseInt(u.port) || 443,
+      path: u.pathname + u.search,
+      method,
+      headers: { "Content-Type": "application/json", ...headers },
+      rejectUnauthorized: false, // self-signed cert
+      timeout: 8000,
+    };
+    const req = https.request(options, (res) => {
+      let data = "";
+      res.on("data", chunk => { data += chunk; });
+      res.on("end", () => {
+        try { resolve({ status: res.statusCode, data: JSON.parse(data) }); }
+        catch  { resolve({ status: res.statusCode, data }); }
+      });
+    });
+    req.on("error", reject);
+    req.on("timeout", () => { req.destroy(); reject(new Error("Wazuh HTTPS-Timeout")); });
+    if (body) req.write(JSON.stringify(body));
+    req.end();
+  });
+}
+
+// ── Wazuh Manager: JWT Token ──────────────────────────────────
+let _wazuhToken = null;
+let _wazuhTokenExp = 0;
+
+async function getWazuhToken() {
+  if (!WAZUH_MANAGER) return null;
+  if (_wazuhToken && Date.now() < _wazuhTokenExp) return _wazuhToken;
+  const auth = Buffer.from(`${WAZUH_USER}:${WAZUH_PASS}`).toString("base64");
+  try {
+    const res = await wazuhHttps("POST", `${WAZUH_MANAGER}/security/user/authenticate`,
+      { Authorization: `Basic ${auth}` }, {});
+    const token = res.data?.data?.token;
+    if (!token) { console.warn("[Monitor] Wazuh Auth: kein Token"); return null; }
+    _wazuhToken = token;
+    _wazuhTokenExp = Date.now() + 14 * 60 * 1000; // 15-Min JWT, erneuern nach 14
+    return token;
+  } catch (e) {
+    console.warn(`[Monitor] Wazuh Auth Fehler: ${e.message}`);
+    return null;
+  }
+}
+
+// ── Wazuh Manager: Agent-Übersicht ───────────────────────────
+async function getWazuhAgentSummary() {
+  if (!WAZUH_MANAGER) return null;
+  const token = await getWazuhToken();
+  if (!token) return null;
+  try {
+    const res = await wazuhHttps("GET", `${WAZUH_MANAGER}/agents/summary/status`,
+      { Authorization: `Bearer ${token}` }, null);
+    if (res.status === 401) { _wazuhToken = null; return null; }
+    return res.data?.data?.connection || null;
+  } catch (e) {
+    console.warn(`[Monitor] Wazuh Agent-Summary Fehler: ${e.message}`);
+    return null;
+  }
+}
+
+// ── Wazuh Indexer: Kritische Alerts ──────────────────────────
+async function fetchWazuhAlerts(sinceMinutes = 10, minLevel = 10) {
+  if (!WAZUH_INDEXER) return null;
+  const auth = Buffer.from(`${WAZUH_USER}:${WAZUH_PASS}`).toString("base64");
+  const body = {
+    size: 10,
+    sort: [{ timestamp: { order: "desc" } }],
+    query: {
+      bool: {
+        filter: [
+          { range: { "rule.level": { gte: minLevel } } },
+          { range: { timestamp: { gte: `now-${sinceMinutes}m` } } },
+        ],
+      },
+    },
+    _source: ["timestamp", "rule.level", "rule.description", "rule.id",
+              "agent.name", "agent.ip", "data.srcip", "full_log"],
+  };
+  try {
+    const res = await wazuhHttps("POST",
+      `${WAZUH_INDEXER}/wazuh-alerts-*/_search`,
+      { Authorization: `Basic ${auth}` }, body);
+    if (res.status !== 200) {
+      console.warn(`[Monitor] Wazuh Indexer HTTP ${res.status}`);
+      return null;
+    }
+    return (res.data?.hits?.hits || []).map(h => h._source);
+  } catch (e) {
+    console.warn(`[Monitor] Wazuh Indexer Fehler: ${e.message}`);
+    return null;
+  }
+}
+
+// ── Wazuh Check (Alerts + Agent-Status) ──────────────────────
+async function checkWazuh() {
+  if (!WAZUH_ENABLED) return null;
+
+  const intervalMin = Math.round(CHECK_INTERVAL_MS / 60000);
+  const wazuhAlerts = await fetchWazuhAlerts(intervalMin, 10);
+  const agentSummary = await getWazuhAgentSummary();
+
+  // Kein Indexer konfiguriert → nur Manager-Status
+  if (wazuhAlerts === null && !agentSummary) {
+    return { ok: false, error: "Wazuh nicht erreichbar", alerts: [], agents: null };
+  }
+
+  const alerts = wazuhAlerts || [];
+  const critical = alerts.filter(a => (a.rule?.level || 0) >= WAZUH_ALERT_LEVEL);
+  const high     = alerts.filter(a => (a.rule?.level || 0) >= 10 && (a.rule?.level || 0) < WAZUH_ALERT_LEVEL);
+
+  // Alert-Texte (max 5)
+  const lines = alerts.slice(0, 5).map(a => {
+    const ts    = (a.timestamp || "").replace("T", " ").slice(0, 16);
+    const agent = a.agent?.name || a.agent?.ip || "?";
+    const desc  = a.rule?.description || "Unbekannte Regel";
+    const lvl   = a.rule?.level ?? "?";
+    return `• [L${lvl}] ${desc} | Agent: ${agent} | ${ts}`;
+  });
+
+  return {
+    ok:       critical.length === 0,
+    critical: critical.length,
+    high:     high.length,
+    total:    alerts.length,
+    lines,
+    agents:   agentSummary,
+  };
+}
+
 // ── Postfach schreiben ────────────────────────────────────────
 async function postToInbox(title, content, type = "info") {
   if (addPostfachFn) {
@@ -138,6 +287,50 @@ async function runChecks() {
   }
   results.push(mem.usedPct !== null ? `🧠 RAM: ${mem.usedPct}% (${mem.usedMB}/${mem.totalMB} MB)` : "🧠 RAM: n/a");
 
+  // Wazuh Check
+  if (WAZUH_ENABLED) {
+    const wazuh = await checkWazuh();
+    if (!wazuh) {
+      results.push("🔒 Wazuh: deaktiviert");
+    } else if (wazuh.error) {
+      results.push(`🔒 Wazuh: ${wazuh.error}`);
+    } else {
+      // Agent-Status
+      if (wazuh.agents) {
+        const { active = 0, disconnected = 0, never_connected = 0 } = wazuh.agents;
+        results.push(`🔒 Wazuh Agents: active=${active}, offline=${disconnected}, nie=${never_connected}`);
+        if (disconnected > 0) {
+          alerts.push({ type: "warning", title: `⚠️ Wazuh: ${disconnected} Agent(s) offline`, msg: `${disconnected} Wazuh-Agent(s) nicht verbunden. Bitte prüfen.` });
+        }
+      }
+      // Alert-Summary
+      if (wazuh.total === 0) {
+        results.push(`🔒 Wazuh Alerts: keine (Level≥10) in letzten ${Math.round(CHECK_INTERVAL_MS / 60000)} Min.`);
+      } else {
+        const alertSummary = wazuh.lines.join("\n");
+        results.push(`🔒 Wazuh Alerts: ${wazuh.total} (${wazuh.critical} critical, ${wazuh.high} high)`);
+        if (wazuh.critical > 0) {
+          alerts.push({
+            type: "alert",
+            title: `🚨 Wazuh: ${wazuh.critical} kritische${wazuh.critical !== 1 ? "r" : ""} Alert(s)`,
+            msg: alertSummary,
+          });
+        } else if (wazuh.high > 0) {
+          // Nur einmal pro Stunde High-Alerts melden
+          const lastHighAlert = state._lastWazuhHighAlert ? new Date(state._lastWazuhHighAlert) : null;
+          if (!lastHighAlert || now - lastHighAlert > 60 * 60 * 1000) {
+            alerts.push({
+              type: "warning",
+              title: `⚠️ Wazuh: ${wazuh.high} High-Alert(s)`,
+              msg: alertSummary,
+            });
+            state._lastWazuhHighAlert = now.toISOString();
+          }
+        }
+      }
+    }
+  }
+
   // Alerts direkt posten
   for (const alert of alerts) {
     await postToInbox(alert.title, alert.msg, alert.type);
@@ -185,12 +378,14 @@ export async function getMonitorStatus() {
 
   const disk = checkDisk();
   const mem = checkMemory();
+  const wazuh = WAZUH_ENABLED ? await checkWazuh() : null;
 
   return {
     timestamp: new Date().toISOString(),
     services: results,
     disk,
     memory: mem,
-    allOk: results.every(r => r.up) && disk.ok && mem.ok,
+    wazuh,
+    allOk: results.every(r => r.up) && disk.ok && mem.ok && (!wazuh || wazuh.ok !== false || !!wazuh.error),
   };
 }
