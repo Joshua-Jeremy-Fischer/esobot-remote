@@ -131,8 +131,8 @@ function sanitizeText(input, maxLen = 1400) {
 /** Kimi K2.5 <think>…</think>-Blöcke entfernen */
 const stripThink = (s) =>
   String(s || "")
-    .replace(/<redacted_thinking>[\s\S]*?<\/redacted_thinking>/gi, "")
-    .replace(/<\/?think>/gi, "")
+    .replace(/<(?:think|redacted_thinking)>[\s\S]*?<\/(?:think|redacted_thinking)>/gi, "")
+    .replace(/<\/?(?:think|redacted_thinking)>/gi, "")
     .trim();
 
 /**
@@ -198,6 +198,41 @@ function isWithin24h(dateStr) {
   const ms = new Date(dateStr).getTime();
   if (isNaN(ms)) return false;
   return Date.now() - ms <= MS_24H;
+}
+
+function inferPublishedAt(text) {
+  const raw = String(text || "").toLowerCase();
+  if (!raw) return null;
+
+  const now = Date.now();
+
+  const h = raw.match(/\bvor\s+(\d{1,2})\s*(stunden|stunde|h)\b/);
+  if (h) return new Date(now - Number(h[1]) * 60 * 60 * 1000).toISOString();
+
+  const min = raw.match(/\bvor\s+(\d{1,3})\s*(minuten|minute|min)\b/);
+  if (min) return new Date(now - Number(min[1]) * 60 * 1000).toISOString();
+
+  if (/\bheute\b/.test(raw)) return new Date(now).toISOString();
+  if (/\bgestern\b/.test(raw)) return new Date(now - 24 * 60 * 60 * 1000).toISOString();
+
+  const iso = raw.match(/\b(20\d{2}-\d{2}-\d{2})\b/);
+  if (iso) {
+    const ms = Date.parse(iso[1]);
+    if (!isNaN(ms)) return new Date(ms).toISOString();
+  }
+
+  const de = raw.match(/\b(\d{1,2})[./-](\d{1,2})[./-](20\d{2})\b/);
+  if (de) {
+    const day = Number(de[1]);
+    const month = Number(de[2]);
+    const year = Number(de[3]);
+    if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
+      const dt = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+      if (!isNaN(dt.getTime())) return dt.toISOString();
+    }
+  }
+
+  return null;
 }
 
 function formatCandidate(c) {
