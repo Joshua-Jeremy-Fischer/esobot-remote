@@ -247,7 +247,8 @@ const PROFILES = [
       "Disponent ERP Stelle München Großraum",
     ],
     titleInclude:  /sachbearbeiter|kaufmänn|innendienst|disponent|einkauf|vertriebsmitarbeiter|vertriebskoordinator|auftragsbearbeitung|warenwirtschaft/i,
-    titleExclude:  /senior|head|lead|direktor|außendienst|executive|ingenieur|techniker|entwickler|architect|consultant/i,
+    // SAP / reine Vertriebs-/Key-Account-Rollen / techn. Vertrieb oft Fehl-Treffer bei Arbeitnow
+    titleExclude:  /senior|head|lead|direktor|außendienst|executive|ingenieur|techniker|entwickler|architect|consultant|\bsap\b|s\/4|s4hana|basis[\s-]?consultant|strategic\s+account|key[\s-]?account|account[\s-]?executive|vertriebsingenieur/i,
     requireRemote: false,
     systemPrompt:  "Kandidat: Kaufmann im Groß- und Außenhandel, ERP (WW90/AS400), Stammdatenpflege. Ziel: Sachbearbeiter Einkauf/Vertrieb/Innendienst, Disponent. Ausschluss: reiner Außendienst >20%, reines Lager, Callcenter.",
   },
@@ -267,7 +268,7 @@ const PROFILES = [
       "SaaS Onboarding Specialist Remote Stelle Deutschland",
     ],
     titleInclude:  /support.specialist|helpdesk|it.support|service.desk|onboarding.specialist|technical.support/i,
-    titleExclude:  /senior|lead|head|sap|erp.berater|architect|developer|entwickler/i,
+    titleExclude:  /senior|lead|head|\bsap\b|s\/4|basis[\s-]?consultant|erp\.?berater|architect|developer|entwickler/i,
     requireRemote: true,
     systemPrompt:  "Kandidat: Kaufm. Ausbildung mit IT-Bezug, Active Directory, Entra ID, ERP, Cybersecurity-Grundlagen. NUR Remote/Homeoffice. Ziel: IT Support Remote, Helpdesk, SaaS Onboarding, Junior IT Consultant. Ausschluss: Pflicht-Studium, reine Vor-Ort-IT.",
   },
@@ -474,7 +475,8 @@ async function classifyCandidate(client, model, candidate, profile) {
     const r2 = await chatClassify(client, {
       model,
       temperature: 0.0,
-      max_tokens: 128,
+      // Kimi (Ollama) braucht oft mehr Platz als nur „Thinking“ — sonst leeres content
+      max_tokens: 256,
       messages: [{ role: "user", content: buildRetryPrompt(candidate, profile) }],
     });
     const d2 = parseBinaryDecision(r2?.choices?.[0]?.message?.content);
