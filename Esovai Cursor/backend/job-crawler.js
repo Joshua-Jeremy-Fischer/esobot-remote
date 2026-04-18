@@ -7,17 +7,46 @@ const INTERVAL_MS  = 6 * 60 * 60 * 1000; // 6 Stunden
 // ─── Bundesagentur für Arbeit (BA) ────────────────────────────────────────────
 const BA_API_BASE   = "https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v4/jobs";
 const BA_API_DETAIL = "https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v4/jobdetails";
-const BA_API_KEY    = "jobboerse-jobsuche-ui";
-const BA_HEADERS    = {
-  "X-API-Key": BA_API_KEY,
-  "User-Agent": "Mozilla/5.0 EsoBot-JobCrawler/2.0",
-  "Accept": "application/json",
-};
+const BA_OAUTH_URL  = "https://rest.arbeitsagentur.de/oauth/gettoken_cc";
+// Öffentliche Client-Credentials der BA-Jobsuche (dokumentiert, kein Geheimnis)
+const BA_CLIENT_ID     = "jobboerse-jobsuche-ui";
+const BA_CLIENT_SECRET = "dd4f4f2e-2d04-4c91-9716-56a7bb4e0e78";
+
+let baToken = null;
+let baTokenExpiry = 0;
+
+async function getBAToken() {
+  if (baToken && Date.now() < baTokenExpiry - 30_000) return baToken;
+  const res = await fetch(BA_OAUTH_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id:     BA_CLIENT_ID,
+      client_secret: BA_CLIENT_SECRET,
+      grant_type:    "client_credentials",
+    }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!res.ok) throw new Error(`BA OAuth ${res.status}`);
+  const data = await res.json();
+  baToken = data.access_token;
+  baTokenExpiry = Date.now() + (data.expires_in || 3600) * 1000;
+  return baToken;
+}
+
+async function baHeaders() {
+  const token = await getBAToken();
+  return {
+    "Authorization": `Bearer ${token}`,
+    "User-Agent": "Mozilla/5.0 EsoBot-JobCrawler/2.0",
+    "Accept": "application/json",
+  };
+}
 
 async function fetchBAJobs({ keyword, location, radius = 50, size = 25 }) {
   const params = new URLSearchParams({ was: keyword, angebotsart: "1", page: "0", size: String(Math.min(size, 25)) });
   if (location) { params.set("wo", location); params.set("umkreis", String(radius)); }
-  const res = await fetch(`${BA_API_BASE}?${params}`, { headers: BA_HEADERS, signal: AbortSignal.timeout(15_000) });
+  const res = await fetch(`${BA_API_BASE}?${params}`, { headers: await baHeaders(), signal: AbortSignal.timeout(15_000) });
   if (!res.ok) throw new Error(`BA-API ${res.status}`);
   return (await res.json()).stellenangebote || [];
 }
@@ -25,7 +54,7 @@ async function fetchBAJobs({ keyword, location, radius = 50, size = 25 }) {
 async function fetchBADetail(refnr) {
   try {
     const res = await fetch(`${BA_API_DETAIL}/${encodeURIComponent(refnr)}`, {
-      headers: BA_HEADERS, signal: AbortSignal.timeout(10_000),
+      headers: await baHeaders(), signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) return null;
     const d = await res.json();
