@@ -111,6 +111,53 @@ function extractJobText(html) {
 
 // ─── Hilfsfunktionen ──────────────────────────────────────────────────────────
 
+/** HTML-Bereinigung + Längenbegrenzung für LLM-Input */
+function sanitizeText(input, maxLen = 1400) {
+  if (!input) return "";
+  return String(input)
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&[a-z#0-9]+;/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLen);
+}
+
+/** Kimi K2.5 <think>…</think>-Blöcke entfernen */
+const stripThink = (s) =>
+  String(s || "").replace(/<think>[\s\S]*?<\/think>/gi, "").replace(/<\/?think>/gi, "").trim();
+
+/**
+ * Binäre Entscheidung aus LLM-Rohtext extrahieren.
+ * Reihenfolge: Direktmatch → isolierte 0/1 → JA/NEIN im Text → null
+ */
+function parseBinaryDecision(raw) {
+  const stripped = stripThink(raw);
+  if (!stripped) return null;
+  const v = stripped.trim().toUpperCase();
+  // Schnelle Matches: Text beginnt mit Entscheidungszeichen
+  if (/^(1|JA\b|YES\b)/.test(v)) return 1;
+  if (/^(0|NEIN\b|NO\b)/.test(v)) return 0;
+  // Fallback: isolierte 0 oder 1 irgendwo im Text
+  const numMatch = v.match(/\b([01])\b/);
+  if (numMatch) return parseInt(numMatch[1], 10);
+  // Fallback: JA/NEIN als Wort irgendwo
+  if (/\b(JA|YES)\b/.test(v)) return 1;
+  if (/\b(NEIN|NO)\b/.test(v))  return 0;
+  return null; // echtes Unbekannt
+}
+
+/**
+ * Regex-Gate: Entscheidung nur per Titel-Regex ohne LLM.
+ * Fail-closed: wenn kein titleInclude-Match → 0 (verwerfen).
+ */
+function regexGate(candidate, profile) {
+  const title = String(candidate.title || "");
+  if (profile.titleExclude?.test(title)) return 0;
+  if (profile.titleInclude?.test(title)) return 1;
+  return 0;
+}
 
 function canonicalUrl(url) {
   try {
@@ -357,75 +404,110 @@ function mergeCandidates(baCandidates, webCandidates) {
   return merged;
 }
 
-// ─── LLM-Filter (JA/NEIN pro Kandidat) ───────────────────────────────────────
+// ─── LLM-Prompts ──────────────────────────────────────────────────────────────
+
+function buildPrimaryPrompt(candidate, profile) {
+  return [
+    "/no_think",
+    "Du bist ein strikter Job-Classifier.",
+    "Antworte NUR mit 1 oder 0. Keine Erklärung. Kein anderer Text.",
+    "1 = Stelle passt zum Profil.  0 = Stelle passt nicht.",
+    "",
+    `Profil: ${profile.label}`,
+    `Regeln: ${profile.systemPrompt || ""}`,
+    "",
+    `Titel: ${candidate.title || ""}`,
+    candidate.company  ? `Firma: ${candidate.company}`    : "",
+    candidate.location ? `Ort: ${candidate.location}`     : "",
+    `Remote: ${candidate.remote ? "ja" : "nein"}`,
+    "",
+    `Stellenbeschreibung:\n${sanitizeText(candidate.text, 1400)}`,
+    "",
+    "Ausgabe: 1 oder 0",
+  ].filter(Boolean).join("\n");
+}
+
+function buildRetryPrompt(candidate, profile) {
+  return [
+    "/no_think",
+    `Profil: ${profile.label}`,
+    `Jobtitel: ${candidate.title || ""}`,
+    "Passt diese Stelle zum Profil?",
+    "Antworte ausschließlich mit 1 (ja) oder 0 (nein). Kein anderer Text.",
+  ].join("\n");
+}
+
+// ─── Einzelklassifikation: Primary → Retry → Regex-Gate ───────────────────────
+
+async function classifyCandidate(client, model, candidate, profile) {
+  // Stufe 1: Primärer Prompt (max_tokens groß genug für Thinking + Antwort)
+  try {
+    const r1 = await client.chat.completions.create({
+      model, temperature: 0.0, max_tokens: 512,
+      messages: [{ role: "user", content: buildPrimaryPrompt(candidate, profile) }],
+    });
+    const d1 = parseBinaryDecision(r1?.choices?.[0]?.message?.content);
+    if (d1 !== null) return { decision: d1, source: "primary" };
+    // Tool-Call-Antwort ohne Content → direkt zu Stufe 2
+  } catch (e) {
+    console.warn(`[JOB-CRAWLER] LLM Stufe-1 Fehler (${candidate.title}): ${e.message}`);
+  }
+
+  // Stufe 2: Emergency Retry — ultra-kurzer Prompt
+  try {
+    const r2 = await client.chat.completions.create({
+      model, temperature: 0.0, max_tokens: 128,
+      messages: [{ role: "user", content: buildRetryPrompt(candidate, profile) }],
+    });
+    const d2 = parseBinaryDecision(r2?.choices?.[0]?.message?.content);
+    if (d2 !== null) return { decision: d2, source: "retry" };
+  } catch (e) {
+    console.warn(`[JOB-CRAWLER] LLM Stufe-2 Fehler (${candidate.title}): ${e.message}`);
+  }
+
+  // Stufe 3: Regex-Gate (fail-closed — kein blindes Behalten mehr)
+  const rg = regexGate(candidate, profile);
+  return { decision: rg, source: "regex_fallback" };
+}
+
+// ─── LLM-Filter ───────────────────────────────────────────────────────────────
+
+/**
+ * Entscheidungsmatrix:
+ *   Primary  1  → behalten
+ *   Primary  0  → verwerfen
+ *   Primary leer → Retry
+ *   Retry    1  → behalten
+ *   Retry    0  → verwerfen
+ *   Retry   leer → Regex-Gate
+ *   Regex-Match  → behalten
+ *   kein Match   → verwerfen  (fail-closed — kein Spam)
+ */
 async function llmFilter(candidates, profile, makeLLMClient) {
   const crawlerModel = (process.env.JOB_CRAWLER_MODEL || "").trim() || undefined;
   let client, model;
   try { ({ client, model } = makeLLMClient(crawlerModel)); }
   catch (e) { console.warn("[JOB-CRAWLER] LLM-Client init:", e.message); return []; }
 
-  const results = [];
+  const kept = [];
 
   for (const c of candidates) {
-    const prompt = [
-      "/no_think",
-      `Profil: ${profile.label}`,
-      profile.systemPrompt,
-      "",
-      `Stelle: ${c.title}`,
-      c.company ? `Arbeitgeber: ${c.company}` : "",
-      c.location ? `Ort: ${c.location}` : "",
-      "",
-      "Stellenbeschreibung (Auszug):",
-      (c.text || "").slice(0, 1200),
-      "",
-      "Ist diese Stelle für das Profil geeignet? Antworte NUR mit dem Wort JA oder NEIN.",
-    ].filter(Boolean).join("\n");
-
-    // Strip <think>-Blöcke aus Kimi-Antworten
-    const stripThink = (s) => String(s || "").replace(/<think>[\s\S]*?<\/think>/gi, "").replace(/<\/?think>/gi, "").trim();
-
-    let answer = "";
     try {
-      const res = await client.chat.completions.create({
-        model, temperature: 0.0, max_tokens: 200,
-        messages: [{ role: "user", content: prompt }],
-      });
-      answer = stripThink(res.choices?.[0]?.message?.content).toUpperCase();
-
-      // Retry bei leer oder Tool-Call
-      if (!answer || res.choices?.[0]?.finish_reason === "tool_calls") {
-        const res2 = await client.chat.completions.create({
-          model, temperature: 0.0, max_tokens: 200,
-          messages: [
-            { role: "user", content: prompt },
-            { role: "assistant", content: "Meine Antwort:" },
-          ],
-        });
-        answer = stripThink(res2.choices?.[0]?.message?.content).toUpperCase();
-      }
-
-      // Ersten JA/NEIN-Token aus längerer Antwort extrahieren
-      const match = answer.match(/\b(JA|NEIN|YES|NO)\b/);
-      if (match) answer = match[1];
+      const { decision, source } = await classifyCandidate(client, model, c, profile);
+      const keep = decision === 1;
+      console.log(`[JOB-CRAWLER] LLM: ${keep ? "✓" : "✗"} ${c.title} → ${decision} (${source})`);
+      if (keep) kept.push(c);
     } catch (e) {
-      console.warn(`[JOB-CRAWLER] LLM-Filter Fehler (${c.title}): ${e.message}`);
-      // Bei LLM-Fehler: Stelle behalten (kein stiller Verlust)
-      results.push(c);
-      continue;
+      // Harter Fehler (z. B. Netzwerk) → Regex-Gate als letzter Ausweg
+      const rg = regexGate(c, profile);
+      console.warn(`[JOB-CRAWLER] LLM-Fehler "${c.title}" → regex_gate=${rg}: ${e.message}`);
+      if (rg === 1) kept.push(c);
     }
 
-    const isNo    = /^(NEIN|NO|N\b)/.test(answer);
-    const isEmpty = !answer;
-    // Leer/unbekannte Antwort → Stelle behalten (kein stiller Verlust)
-    const keep = !isNo;
-    console.log(`[JOB-CRAWLER] LLM: ${keep ? "✓" : "✗"} ${c.title} → ${answer || "(leer→behalten)"}`);
-    if (keep) results.push(c);
-
-    if (results.length >= 12) break;
+    if (kept.length >= 12) break;
   }
 
-  return results;
+  return kept;
 }
 
 // ─── runSearch (Orchestrierung) ───────────────────────────────────────────────
