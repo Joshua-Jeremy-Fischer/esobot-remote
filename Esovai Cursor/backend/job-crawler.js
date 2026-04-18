@@ -480,12 +480,13 @@ export async function crawlJobs(webSearch, makeLLMClient) {
     const { addPostfachEntry } = await import("./agent.js");
     for (const p of Object.values(jobStore.results)) {
       if (!p?.content) continue;
-      const raw    = String(p.content).trim();
-      const isNone = /^Keine\s/i.test(raw);
-      const lines  = isNone ? [] : raw.split("\n").filter(l => l.includes("|"));
-      const count  = lines.length;
+      const raw   = String(p.content).trim();
+      const lines = raw.split("\n").filter(l => l.includes("|"));
+      const count = lines.length;
+      // Nur ins Postfach wenn echte Stellen gefunden — kein Spam bei 0 Ergebnissen
+      if (count === 0) continue;
       await addPostfachEntry(
-        `💼 ${p.label}: ${count > 0 ? `${count} Stelle${count !== 1 ? "n" : ""} gefunden` : "Keine Ergebnisse"}`,
+        `💼 ${p.label}: ${count} Stelle${count !== 1 ? "n" : ""} gefunden`,
         p.content,
         "jobs",
       );
