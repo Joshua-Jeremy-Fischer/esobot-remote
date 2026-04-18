@@ -191,13 +191,14 @@ function isLocationBad(text) {
   return /\b(berlin|hamburg|frankfurt|köln|cologne|stuttgart|düsseldorf|nürnberg|nuremberg|leipzig|dresden|hannover|bremen|essen|dortmund|landshut|freising)\b/i.test(text);
 }
 
-const MS_24H = 24 * 60 * 60 * 1000;
+// Arbeitnow: 72h Fenster (IT Security hat wenige Tagespostings in München)
+const MS_72H = 72 * 60 * 60 * 1000;
 
-function isWithin24h(dateStr) {
+function isWithin72h(dateStr) {
   if (!dateStr) return false;
   const ms = new Date(dateStr).getTime();
   if (isNaN(ms)) return false;
-  return Date.now() - ms <= MS_24H;
+  return Date.now() - ms <= MS_72H;
 }
 
 function inferPublishedAt(text) {
@@ -262,17 +263,20 @@ const PROFILES = [
     id: "it-security",
     label: "IT Security",
     baSearches: [
-      ["SOC Analyst",         "München",     50, false],
-      ["Security Analyst",    "München",     50, false],
-      ["IT Security",         "München",     50, false],
-      ["IAM Engineer",        "Deutschland",  0, true],
-      ["Security Engineer",   "Deutschland",  0, true],
+      // Breite Suche ohne Location-Einschränkung um mehr Treffer zu bekommen
+      ["Security Analyst",       "",            0, false],
+      ["SOC Analyst",            "",            0, false],
+      ["Cybersecurity Analyst",  "",            0, false],
+      ["Information Security",   "",            0, false],
+      ["IT Security Analyst",    "Munich",      0, false],
+      ["IAM Engineer",           "",            0, true],
+      ["Security Operations",    "",            0, false],
     ],
     searxQueries: [
       "Junior SOC Analyst Stelle München 2026",
       "IT Security Analyst Junior Stelle München Quereinsteiger",
       "Junior IAM Engineer Stelle Remote Deutschland",
-      "ISMS Koordinator Junior Stelle Deutschland",
+      "Cybersecurity Analyst Junior Deutschland Stelle",
     ],
     titleInclude:  /soc|security|sicherheit|iam|isms|cyber|siem|soar|pentest|compliance|analyst/i,
     titleExclude:  /senior|lead|head|architect|principal|manager|direktor|ciso/i,
@@ -346,7 +350,7 @@ async function fetchFromBA(profile) {
 
       const c = arbeitnowToCandidate(job);
       if (!titleMatchesProfile(profile, c.title)) continue;
-      if (!isWithin24h(c.publishedAt)) continue;
+      if (!isWithin72h(c.publishedAt)) continue;
       if (profile.requireRemote && !c.remote) continue;
       if (!c.remote && isLocationBad(c.location)) continue;
 
@@ -411,15 +415,18 @@ async function fetchFromSearXNG(profile, webSearch) {
     const parsed  = extractJobText(html);
     if (!parsed) return null;
 
-    // Kein Datum → verwerfen (Option 1: Präzision)
-    if (!parsed.publishedAt) return null;
-    if (!isWithin24h(parsed.publishedAt)) return null;
+    // Datum: JSON-LD → Meta-Tag → Text-Extraktion → ohne Datum = akzeptieren
+    const pubDate = parsed.publishedAt || inferPublishedAt(parsed.text);
+    // Wenn Datum bekannt und älter als 72h → verwerfen
+    if (pubDate && !isWithin72h(pubDate)) return null;
 
     // Titel aus HTML <title>-Tag
     const titleMatch = html?.match(/<title[^>]*>([^<]+)<\/title>/i);
     const rawTitle   = (titleMatch?.[1] || "").replace(/\s*[|–\-]\s*.*$/, "").trim();
 
-    if (!titleMatchesProfile(profile, rawTitle)) return null;
+    // Für Web-Seiten: nur titleExclude prüfen (titleInclude zu streng → viele False Negatives
+    // durch generische <title>-Tags wie "Stellenanzeige | StepStone"). LLM filtert den Rest.
+    if (profile.titleExclude?.test(rawTitle)) return null;
 
     const remote = isRemote(`${rawTitle} ${parsed.text}`);
     if (profile.requireRemote && !remote) return null;
@@ -431,7 +438,7 @@ async function fetchFromSearXNG(profile, webSearch) {
       title:       rawTitle || url,
       company:     "",
       location:    "",
-      publishedAt: parsed.publishedAt,
+      publishedAt: pubDate || "",
       remote,
       text:        parsed.text,
     };
