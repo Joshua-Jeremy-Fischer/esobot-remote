@@ -196,8 +196,8 @@ const PROFILES = [
       "Kaufmännischer Mitarbeiter Einkauf Stelle Erding Mühldorf",
       "Disponent ERP Stelle München Großraum",
     ],
-    titleInclude:  /sachbearbeiter|kaufmänn|innendienst|disponent|einkauf|vertrieb|koordinator|account|warenwirtschaft|erp/i,
-    titleExclude:  /senior|head|lead|direktor|außendienst/i,
+    titleInclude:  /sachbearbeiter|kaufmänn|innendienst|disponent|einkauf|vertriebsmitarbeiter|vertriebskoordinator|auftragsbearbeitung|warenwirtschaft/i,
+    titleExclude:  /senior|head|lead|direktor|außendienst|executive|ingenieur|techniker|entwickler|architect|consultant/i,
     requireRemote: false,
     systemPrompt:  "Kandidat: Kaufmann im Groß- und Außenhandel, ERP (WW90/AS400), Stammdatenpflege. Ziel: Sachbearbeiter Einkauf/Vertrieb/Innendienst, Disponent. Ausschluss: reiner Außendienst >20%, reines Lager, Callcenter.",
   },
@@ -216,8 +216,8 @@ const PROFILES = [
       "Junior IT Consultant Remote Stelle Deutschland",
       "SaaS Onboarding Specialist Remote Stelle Deutschland",
     ],
-    titleInclude:  /support|helpdesk|consultant|onboarding|service.desk|technical|it.specialist/i,
-    titleExclude:  /senior|lead|head/i,
+    titleInclude:  /support.specialist|helpdesk|it.support|service.desk|onboarding.specialist|technical.support/i,
+    titleExclude:  /senior|lead|head|sap|erp.berater|architect|developer|entwickler/i,
     requireRemote: true,
     systemPrompt:  "Kandidat: Kaufm. Ausbildung mit IT-Bezug, Active Directory, Entra ID, ERP, Cybersecurity-Grundlagen. NUR Remote/Homeoffice. Ziel: IT Support Remote, Helpdesk, SaaS Onboarding, Junior IT Consultant. Ausschluss: Pflicht-Studium, reine Vor-Ort-IT.",
   },
@@ -368,6 +368,7 @@ async function llmFilter(candidates, profile, makeLLMClient) {
 
   for (const c of candidates) {
     const prompt = [
+      "/no_think",
       `Profil: ${profile.label}`,
       profile.systemPrompt,
       "",
@@ -376,31 +377,37 @@ async function llmFilter(candidates, profile, makeLLMClient) {
       c.location ? `Ort: ${c.location}` : "",
       "",
       "Stellenbeschreibung (Auszug):",
-      (c.text || "").slice(0, 1500),
+      (c.text || "").slice(0, 1200),
       "",
-      "Ist diese Stelle für das Profil geeignet? Antworte NUR mit JA oder NEIN.",
+      "Ist diese Stelle für das Profil geeignet? Antworte NUR mit dem Wort JA oder NEIN.",
     ].filter(Boolean).join("\n");
+
+    // Strip <think>-Blöcke aus Kimi-Antworten
+    const stripThink = (s) => String(s || "").replace(/<think>[\s\S]*?<\/think>/gi, "").replace(/<\/?think>/gi, "").trim();
 
     let answer = "";
     try {
-      // Versuch 1
       const res = await client.chat.completions.create({
-        model, temperature: 0.0, max_tokens: 10,
+        model, temperature: 0.0, max_tokens: 200,
         messages: [{ role: "user", content: prompt }],
       });
-      answer = (res.choices?.[0]?.message?.content || "").trim().toUpperCase();
+      answer = stripThink(res.choices?.[0]?.message?.content).toUpperCase();
 
-      // Retry bei Tool-Call oder leer
+      // Retry bei leer oder Tool-Call
       if (!answer || res.choices?.[0]?.finish_reason === "tool_calls") {
         const res2 = await client.chat.completions.create({
-          model, temperature: 0.0, max_tokens: 10,
+          model, temperature: 0.0, max_tokens: 200,
           messages: [
             { role: "user", content: prompt },
-            { role: "user", content: "Antworte ausschließlich mit JA oder NEIN." },
+            { role: "assistant", content: "Meine Antwort:" },
           ],
         });
-        answer = (res2.choices?.[0]?.message?.content || "").trim().toUpperCase();
+        answer = stripThink(res2.choices?.[0]?.message?.content).toUpperCase();
       }
+
+      // Ersten JA/NEIN-Token aus längerer Antwort extrahieren
+      const match = answer.match(/\b(JA|NEIN|YES|NO)\b/);
+      if (match) answer = match[1];
     } catch (e) {
       console.warn(`[JOB-CRAWLER] LLM-Filter Fehler (${c.title}): ${e.message}`);
       // Bei LLM-Fehler: Stelle behalten (kein stiller Verlust)
