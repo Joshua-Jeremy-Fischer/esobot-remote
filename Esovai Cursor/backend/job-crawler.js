@@ -106,6 +106,10 @@ function extractJobText(html) {
 
   if (text.length < 100) return null; // kein brauchbarer Text
 
+  if (!publishedAt) {
+    publishedAt = inferPublishedAt(text) || inferPublishedAt(html);
+  }
+
   return { text, publishedAt };
 }
 
@@ -160,6 +164,14 @@ function regexGate(candidate, profile) {
   if (profile.titleExclude?.test(title)) return 0;
   if (profile.titleInclude?.test(title)) return 1;
   return 0;
+}
+
+/** Gleiche Regeln wie in fetchFromBA — zentral, damit Merge/Web nie „schlechte“ Titel durchlässt. */
+function titleMatchesProfile(profile, title) {
+  const t = String(title || "");
+  if (profile.titleInclude && !profile.titleInclude.test(t)) return false;
+  if (profile.titleExclude && profile.titleExclude.test(t)) return false;
+  return true;
 }
 
 function canonicalUrl(url) {
@@ -298,8 +310,7 @@ async function fetchFromBA(profile) {
       seen.add(id);
 
       const c = arbeitnowToCandidate(job);
-      if (profile.titleInclude && !profile.titleInclude.test(c.title)) continue;
-      if (profile.titleExclude &&  profile.titleExclude.test(c.title)) continue;
+      if (!titleMatchesProfile(profile, c.title)) continue;
       if (!isWithin24h(c.publishedAt)) continue;
       if (profile.requireRemote && !c.remote) continue;
       if (!c.remote && isLocationBad(c.location)) continue;
@@ -371,8 +382,7 @@ async function fetchFromSearXNG(profile, webSearch) {
     const titleMatch = html?.match(/<title[^>]*>([^<]+)<\/title>/i);
     const rawTitle   = (titleMatch?.[1] || "").replace(/\s*[|–\-]\s*.*$/, "").trim();
 
-    if (profile.titleInclude && !profile.titleInclude.test(rawTitle)) return null;
-    if (profile.titleExclude &&  profile.titleExclude.test(rawTitle)) return null;
+    if (!titleMatchesProfile(profile, rawTitle)) return null;
 
     const remote = isRemote(`${rawTitle} ${parsed.text}`);
     if (profile.requireRemote && !remote) return null;
@@ -537,7 +547,11 @@ async function runSearch(profile, webSearch, makeLLMClient) {
     fetchFromSearXNG(profile, webSearch),
   ]);
 
-  const all = mergeCandidates(baCandidates, webCandidates);
+  const merged = mergeCandidates(baCandidates, webCandidates);
+  const all = merged.filter((c) => titleMatchesProfile(profile, c.title));
+  if (merged.length !== all.length) {
+    console.log(`[JOB-CRAWLER] Titel-Nachfilter: ${merged.length} → ${all.length} (${profile.id})`);
+  }
   console.log(`[JOB-CRAWLER] Gesamt nach Merge: ${all.length} Kandidaten (${profile.id})`);
 
   if (all.length === 0) return "Keine passenden Stellen gefunden.";
