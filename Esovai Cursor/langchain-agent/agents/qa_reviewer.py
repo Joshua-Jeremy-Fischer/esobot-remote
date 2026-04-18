@@ -1,9 +1,8 @@
 import json
 import re
-from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 from tools.esobot_tools import QA_TOOLS
-from config import OLLAMA_BASE_URL, OLLAMA_MODEL
+from config import make_llm
 
 SYSTEM_PROMPT = """You are a QA Reviewer Agent. Review the provided code for:
 1. Logic errors and bugs
@@ -15,16 +14,6 @@ Respond with valid JSON only — no markdown, no extra text, no <think> tags:
 {"passed": true/false, "issues": ["issue1", "issue2"], "summary": "one-line verdict"}
 
 If no critical issues found: passed=true and issues=[]."""
-
-
-def _make_llm() -> ChatOpenAI:
-    # QA is lighter — use Ollama to save API credits
-    return ChatOpenAI(
-        api_key="ollama",
-        base_url=OLLAMA_BASE_URL,
-        model=OLLAMA_MODEL,
-        temperature=0.1,
-    )
 
 
 def _extract_json(raw: str) -> dict | None:
@@ -47,7 +36,7 @@ def _extract_json(raw: str) -> dict | None:
 
 
 async def qa_reviewer_node(state: dict) -> dict:
-    llm = _make_llm()
+    llm = make_llm(temperature=0.1)
     agent = create_react_agent(llm, QA_TOOLS, prompt=SYSTEM_PROMPT)
     user_msg = f"Task: {state['task']}\n\nCode to review:\n{state['code']}"
     result = await agent.ainvoke({"messages": [("user", user_msg)]})

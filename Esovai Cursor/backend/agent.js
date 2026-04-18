@@ -835,9 +835,6 @@ export function createAgentRouter() {
     return null;
   }
 
-    return null;
-  }
-
   // POST /api/agent/inbox — User schreibt, Agent antwortet (mit Web-Suche + Postfach-Action)
   router.post("/inbox", async (req, res) => {
     const { content } = req.body;

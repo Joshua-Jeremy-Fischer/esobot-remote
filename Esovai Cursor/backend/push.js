@@ -3,11 +3,16 @@ import fs from "fs/promises";
 
 const SUBS_FILE = "/data/push-subscriptions.json";
 
-webpush.setVapidDetails(
-  "mailto:agent@esovai.tech",
-  process.env.VAPID_PUBLIC_KEY,
-  process.env.VAPID_PRIVATE_KEY
-);
+const vapidConfigured = !!(process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY);
+if (vapidConfigured) {
+  webpush.setVapidDetails(
+    "mailto:agent@esovai.tech",
+    process.env.VAPID_PUBLIC_KEY,
+    process.env.VAPID_PRIVATE_KEY
+  );
+} else {
+  console.warn("[PUSH] VAPID keys not set — push notifications disabled.");
+}
 
 let subscriptions = [];
 
@@ -37,7 +42,7 @@ export function addSubscription(sub) {
 }
 
 export async function sendPush(payload) {
-  if (!subscriptions.length) return;
+  if (!vapidConfigured || !subscriptions.length) return;
   const dead = [];
   for (const sub of subscriptions) {
     try {

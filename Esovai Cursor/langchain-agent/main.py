@@ -1,4 +1,6 @@
 import json
+import logging
+import traceback
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query
@@ -7,6 +9,8 @@ from sse_starlette.sse import EventSourceResponse
 
 from config import PORT
 from graph import WorkflowState, workflow
+
+logging.basicConfig(level=logging.INFO)
 
 app = FastAPI(title="LangGraph Multi-Agent Service")
 
@@ -49,7 +53,8 @@ async def run_workflow(req: WorkflowRequest):
             "steps":           state["steps"],
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logging.error("Workflow error: %s\n%s", e, traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e) or repr(e))
 
 
 @app.get("/workflow/stream")
