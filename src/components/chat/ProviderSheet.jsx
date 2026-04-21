@@ -10,7 +10,7 @@ export const PROVIDERS = [
     { id: "phi4", label: "Phi-4" },
     { id: "gemma3", label: "Gemma 3" },
   ], cloudModels: [
-    { id: "kimi-k2.5:cloud", label: "Kimi K2.5" },
+    { id: "kimi-k2.6:cloud", label: "Kimi K2.6" },
     { id: "llama3.3:cloud", label: "LLaMA 3.3" },
     { id: "gemma3:cloud", label: "Gemma 3" },
     { id: "qwen2.5:cloud", label: "Qwen2.5" },
@@ -22,7 +22,7 @@ export const PROVIDERS = [
     { id: "qwen2.5", label: "Qwen2.5" },
     { id: "phi4", label: "Phi-4" },
     { id: "gemma3", label: "Gemma 3" },
-    { id: "kimi-k2.5:cloud", label: "Kimi K2.5 ☁️" },
+    { id: "kimi-k2.6:cloud", label: "Kimi K2.6 ☁️" },
     { id: "llama3.3:cloud", label: "LLaMA 3.3 ☁️" },
     { id: "gemma3:cloud", label: "Gemma 3 ☁️" },
     { id: "qwen2.5:cloud", label: "Qwen2.5 ☁️" },
@@ -30,7 +30,7 @@ export const PROVIDERS = [
     { id: "phi4:cloud", label: "Phi-4 ☁️" },
   ]},
   { id: "opencode-go", label: "OpenCode Go ⚡", sublabel: "Abo", models: [
-    { id: "kimi-k2.5", label: "Kimi K2.5" },
+    { id: "kimi-k2.6", label: "Kimi K2.6" },
     { id: "glm-5", label: "GLM-5" },
     { id: "minimax-m2.5", label: "MiniMax M2.5" },
     { id: "minimax-m2.7", label: "MiniMax M2.7" },

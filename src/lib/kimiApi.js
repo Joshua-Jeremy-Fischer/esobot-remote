@@ -1,4 +1,4 @@
-const BASE_URL = "https://kamikimi.esovai.tech";
+const BASE_URL = "";
 
 function getToken() {
   return localStorage.getItem("kimi_token") || "";
@@ -15,13 +15,25 @@ function headers() {
   };
 }
 
+function throwApiError(res, context) {
+  if (res.status === 401) {
+    const missing = !getToken();
+    throw new Error(
+      missing
+        ? `Kein API-Token gesetzt — bitte in Einstellungen eintragen.`
+        : `Ungültiger API-Token (401) — bitte in Einstellungen korrigieren.`
+    );
+  }
+  throw new Error(`${context}: ${res.status}`);
+}
+
 export async function sendChatMessage(messages, model) {
   const res = await fetch(`${BASE_URL}/api/chat`, {
     method: "POST",
     headers: headers(),
     body: JSON.stringify({ messages, model })
   });
-  if (!res.ok) throw new Error(`Chat API error: ${res.status}`);
+  if (!res.ok) throwApiError(res, "Chat API Fehler");
   return res.json();
 }
 
@@ -31,7 +43,7 @@ export async function sendAgentTask(task) {
     headers: headers(),
     body: JSON.stringify(task)
   });
-  if (!res.ok) throw new Error(`Agent API error: ${res.status}`);
+  if (!res.ok) throwApiError(res, "Agent API Fehler");
   return res.json();
 }
 
@@ -40,7 +52,7 @@ export async function getAgentStatus() {
     method: "GET",
     headers: headers()
   });
-  if (!res.ok) throw new Error(`Agent status error: ${res.status}`);
+  if (!res.ok) throwApiError(res, "Agent Status Fehler");
   return res.json();
 }
 

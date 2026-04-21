@@ -61,8 +61,8 @@ export function addMessage(chatId, role, content, imageUrl) {
 export function loadSettings() {
   const raw = localStorage.getItem(SETTINGS_KEY);
   return raw ? JSON.parse(raw) : {
-    provider: "openai",
-    model: "gpt-4o-mini",
+    provider: "ollama",
+    model: "kimi-k2.6:cloud",
     systemPrompt: "Du bist KimiKimi, ein hilfreicher KI-Assistent. Antworte auf Deutsch, klar und präzise.",
     darkMode: true,
     pushNotifications: false
